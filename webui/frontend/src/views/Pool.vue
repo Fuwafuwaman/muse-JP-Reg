@@ -37,13 +37,13 @@ const STATUS_TYPE = { available: 'success', in_use: 'warning', done: 'primary', 
 const kindOptions = computed(() =>
   providers.value.filter((p) => p.pooled).map((p) => ({
     kind: p.kind,
-    label: p.display_name,
+    label: t(p.display_name),
     count: byKind.value[p.kind]?.total || 0,
   })),
 )
 
 function kindLabel(k) {
-  return providers.value.find((p) => p.kind === k)?.display_name || k || 'outlook'
+  return t(providers.value.find((p) => p.kind === k)?.display_name || k || 'outlook')
 }
 
 async function loadProviders() {

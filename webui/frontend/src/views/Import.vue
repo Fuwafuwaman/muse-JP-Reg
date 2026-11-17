@@ -139,7 +139,7 @@ async function doImport() {
         </el-form-item>
       </el-form>
 
-      <p class="hint" v-if="current" v-html="t('HTML:每行一段说明', { n: current.line_segments, hint: current.import_hint || '' })">
+      <p class="hint" v-if="current" v-html="t('HTML:每行一段说明', { n: current.line_segments, hint: t(current.import_hint || '') })">
       </p>
 
       <el-input

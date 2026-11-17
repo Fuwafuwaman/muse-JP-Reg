@@ -399,6 +399,14 @@ export default {
   'HTML:邮箱来源说明':
     '<code>muse.ai</code> の登録はパスワードなしのメール 6 桁ワンタイムコード（OTP）認証。既定では <b>iCloud 中継 / OTP リンクプール</b>の利用を推奨（ローカル 4173 ワークベンチまたは <code>otp-urls.txt</code> と直接連携）。',
 
+  // ──────────── メール取得元の表示名（バックエンドの display_name） ────────────
+  'Outlook 接码池': 'Outlook OTP 受信プール',
+  'iCloud 中转 / OTP 链接池': 'iCloud 中継 / OTP 受信リンクプール',
+  'CF Worker 临时邮箱': 'CF Worker 使い捨てメール',
+  '每行一个：email----password----client_id----refresh_token':
+    '各行 1 件：email----password----client_id----refresh_token',
+  'email----取件链接或OTP源URL': 'email----OTP 取得リンクまたは OTP ソース URL',
+
   // ──────────── 运行记录 ────────────
   '最终阶段': '最終フェーズ',
   '分类': '分類',

@@ -155,7 +155,7 @@ load()
 
     <FooterToolbar>
       <template #left>
-        {{ t('当前邮箱来源：') }}{{ current?.display_name || source }}
+        {{ t('当前邮箱来源：') }}{{ localizeLog(current?.display_name || source) }}
       </template>
       <el-button v-if="canTest" :loading="testing" @click="test">{{ t('测试连通性') }}</el-button>
       <el-button type="primary" :loading="saving" @click="save">{{ t('保存配置') }}</el-button>
