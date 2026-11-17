@@ -81,3 +81,6 @@ config.local.json
 secrets.json
 proxies*.txt
 codes*.txt
+
+# OTP 消费済みメール id レジストリ（実行時状態）
+data/otp_consumed.json

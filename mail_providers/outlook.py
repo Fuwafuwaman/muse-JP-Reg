@@ -19,6 +19,7 @@ import email.utils as _eu
 import imaplib
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -26,6 +27,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from .base import ConfigField, MailProvider, register, validate_email
@@ -34,24 +36,65 @@ logger = logging.getLogger(__name__)
 
 # ─────────────────── 已消费 OTP 邮件登记（防串号） ───────────────────
 #
-# 同一邮箱被重试时（前一次 attempt 已把信取走、或被 kill 掉），旧信仍在
-# 收件箱里。Graph 的 receivedDateTime 与本机时钟有数分钟偏移，仅靠
-# issued_after 时间窗拦不住，会把「上一轮那次 attempt 的废码」当成本轮结果
-# 交给 confirm-otp 从而 400 invalidCode。这里按邮箱记住已经取过的邮件 id，
-# する。Graph の receivedDateTime と本機クロックには数分のずれがあり、
-# issued_after の時間窓だけでは弾けない。ここでメールボックス単位に既読 id を
-# 覚え、後続の attempt では必ずスキップして、今回の send_otp が起こした
-# 新しいメールを待たせる。
+# 同一メールボックスを別 attempt で再試行すると（前回の attempt が既に信を
+# 取った／kill された）、古い検証メールが受信箱に残っている。Graph の
+# receivedDateTime と本機クロックには数分のずれがあり、issued_after の時間窓
+# だけでは弾けないため、前回消費済みのコードを新しいコードとして
+# confirm-otp に渡し 400 invalidCode で死ぬ。ここでメールボックス単位に
+# 既読メール id を覚え、後続 attempt ではスキップして今回 send_otp が起こした
+# 新着を待たせる。プロセス再起動でも忘れないよう JSON に永続化する
+# （OTP_CONSUMED_STORE でパスを上書き可）。
 _CONSUMED_OTP_MSGS: dict[str, dict[str, float]] = {}
 _CONSUMED_OTP_LOCK = threading.Lock()
 _CONSUMED_OTP_TTL = 3600.0
+_CONSUMED_OTP_STORE = Path(
+    os.environ.get("OTP_CONSUMED_STORE")
+    or Path(__file__).resolve().parent.parent / "data" / "otp_consumed.json"
+)
+_CONSUMED_OTP_LOADED = False
+
+
+def _consumed_store_load() -> None:
+    global _CONSUMED_OTP_LOADED
+    if _CONSUMED_OTP_LOADED:
+        return
+    _CONSUMED_OTP_LOADED = True
+    try:
+        raw = json.loads(_CONSUMED_OTP_STORE.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            now = time.time()
+            for addr, bucket in raw.items():
+                if not isinstance(bucket, dict):
+                    continue
+                kept = {k: float(v) for k, v in bucket.items()
+                        if now - float(v) <= _CONSUMED_OTP_TTL}
+                if kept:
+                    _CONSUMED_OTP_MSGS[addr.lower()] = kept
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logger.warning(f"[outlook] 已消费 OTP 记录读取失败: {e}")
+
+
+def _consumed_store_save() -> None:
+    try:
+        _CONSUMED_OTP_STORE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _CONSUMED_OTP_STORE.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps(_CONSUMED_OTP_MSGS, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        os.replace(tmp, _CONSUMED_OTP_STORE)
+    except Exception as e:
+        logger.warning(f"[outlook] 已消费 OTP 记录保存失败: {e}")
 
 
 def _msg_already_consumed(email_addr: str, key: str) -> bool:
     now = time.time()
     with _CONSUMED_OTP_LOCK:
+        _consumed_store_load()
         bucket = _CONSUMED_OTP_MSGS.setdefault(email_addr.lower(), {})
-        for k, ts in [(k, v) for k, v in bucket.items() if now - v > _CONSUMED_OTP_TTL]:
+        for k in [k for k, v in bucket.items() if now - v > _CONSUMED_OTP_TTL]:
             bucket.pop(k, None)
         return key in bucket
 
@@ -59,6 +102,7 @@ def _msg_already_consumed(email_addr: str, key: str) -> bool:
 def _mark_msg_consumed(email_addr: str, key: str) -> None:
     with _CONSUMED_OTP_LOCK:
         _CONSUMED_OTP_MSGS.setdefault(email_addr.lower(), {})[key] = time.time()
+        _consumed_store_save()
 
 # ──────────────────────── 常量 ────────────────────────
 
