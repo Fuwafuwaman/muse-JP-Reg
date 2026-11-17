@@ -90,6 +90,14 @@ class AutoLoopController:
             self._proxy_claims.clear()
             self._pool_bad.clear()
 
+            # 追加実行 (WebUI 再起動・停止後の再開) で 20 件が 20 件超過しないよう、
+            # すでに登録済みで年齢確認が未解除のアカウントを「保留」として引き継ぐ。
+            try:
+                seeded = db.count_registered_unactivated()
+                self._registered_pending = max(0, int(seeded))
+            except Exception:
+                self._registered_pending = 0
+
             self._concurrency = max(1, min(20, int(self._options.get("concurrency") or 1)))
             self._max_per_ip = max(1, int(self._options.get("max_per_ip") or 6))
             self._target_count = max(0, int(self._options.get("target_count") or 0))
@@ -97,7 +105,9 @@ class AutoLoopController:
             self._proxy_pool = _parse_proxy_pool(self._options.get("proxy_pool") or "")
             self._last_message = (
                 f"批量调度已启动 (并发={self._concurrency}, "
-                f"代理池={len(self._proxy_pool)}, max_per_ip={self._max_per_ip})"
+                f"代理池={len(self._proxy_pool)}, max_per_ip={self._max_per_ip}"
+                + (f", 引き継ぎ保留={self._registered_pending}" if self._registered_pending else "")
+                + ")"
             )
 
             self._manage_thread = threading.Thread(

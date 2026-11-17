@@ -800,6 +800,14 @@ def count_registered(filter_rt: str = "all") -> int:
     return cur.fetchone()[0]
 
 
+def count_registered_unactivated() -> int:
+    """已注册但年齢確認（CCV）未解除の件数。バッチ再起動時の残り件数に使う。"""
+    con = _conn()
+    return con.execute(
+        "SELECT COUNT(*) FROM registered WHERE status='registered_unactivated'"
+    ).fetchone()[0]
+
+
 def registered_stats() -> dict:
     con = _conn()
     total = con.execute("SELECT COUNT(*) FROM registered").fetchone()[0]
