@@ -61,12 +61,15 @@
   <button onclick="rearmAll()">全部の URL を出し直す</button>
   <button onclick="refresh()">今すぐ更新</button>
   <button onclick="clearDone()">完了分を消す</button>
+  <label class="sub"><input type="checkbox" id="autoRearm" checked onchange="setAuto(this.checked)"> 切れた URL を自動で出し直す</label>
   <span id="autoLabel" class="sub"></span>
 </div>
 <div class="note">
   まとめて処理する場合は「全部タブで開く」→ 開いたタブで順に <b>「許可」/「続行」</b> を押していくだけです。
   承認は数十秒でこのページに反映され、行の状態が <code>continue</code> に変わります。
   URL が切れたら「全部の URL を出す直す」を押してから、また「全部タブで開く」で続けられます。
+  <br><b>自動出し直し</b>がオンの間は、席を外していても URL が生き返ります（古いタブで承認しても、
+  そのアカウントは <code>continue</code> として拾われます）。
 </div>
 <div id="sessions"></div>
 
@@ -131,15 +134,29 @@ async function api(path, opts) {
 
 async function refresh() {
   try {
-    const [s, t] = await Promise.all([
+    const [s, t, a] = await Promise.all([
       api("/api/ccv/link/sessions"),
       api("/api/ccv/link/targets"),
+      api("/api/ccv/link/auto"),
     ]);
+    $("autoRearm").checked = !!a.enabled;
+    $("autoLabel").textContent = a.enabled ? "自動出し直し: オン" : "自動出し直し: オフ";
     renderSessions(s.sessions || []);
     renderTargets(t.targets || []);
   } catch (e) {
     $("sessions").innerHTML = '<div class="empty">取得に失敗: ' + esc(e.message) + "</div>";
   }
+}
+
+async function setAuto(on) {
+  try {
+    await api("/api/ccv/link/auto", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: !!on }),
+    });
+  } catch (e) { alert("切り替えに失敗: " + e.message); }
+  refresh();
 }
 
 function renderSessions(list) {

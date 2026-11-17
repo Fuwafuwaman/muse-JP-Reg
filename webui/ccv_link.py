@@ -25,7 +25,15 @@ logger = logging.getLogger("webui.ccv_link")
 
 # クライアントが組める／URL が返るまでの待ち（秒）
 _URL_WAIT = 45.0
-_POLL_INTERVAL = 3.0
+_POLL_INTERVAL = 4.0
+
+# 承認 URL の寿命は実測で約 17 分しかない。人間が席を外していても URL が
+# 絶えないよう、寿命が縮んだ試行を裏で自動的に出し直す。
+_AUTO_REARM_INTERVAL = 90.0    # 監視周期（秒）
+_AUTO_REARM_MARGIN = 150.0     # 残り寿命がこれ未満になったら出し直す
+_AUTO_REARM_COOLDOWN = 45.0    # 同じメールを立て続けに出し直さない間隔
+_AUTO_REARM_WAIT = 8.0         # 出し直し 1 件あたりの URL 待ち（秒）
+_AUTO_REARM_STATES = frozenset({"pending", "error"}) | linking.RETRY_ACTIONS
 
 
 def _build_client(email: str, proxy: str = "") -> MuseClient:
@@ -100,6 +108,7 @@ class LinkSession:
         self.id = session_id or f"ccvlink:{int(time.time() * 1000)}-{email}"
         self.external = external
         self.url: Optional[str] = None
+        self.attempt_id: Optional[str] = None
         self.expires_at = None
         self.state = "starting"   # starting / pending / 終端の next_action / error
         self.started_at = time.time()
@@ -155,29 +164,35 @@ class LinkSession:
             def _on_url(url: str, info: dict) -> None:
                 self.url = url
                 self.expires_at = info.get("expires_at")
+                if info.get("attempt_id"):
+                    self.attempt_id = info["attempt_id"]
                 self._url_ready.set()
 
             deadline = time.time() + max(60.0, float(self.timeout or 0.0)) + 60.0
             last_exc: Optional[Exception] = None
-            for rnd in range(3):
+            for rnd in range(4):
                 try:
+                    # URL が生きているうちは同じ attempt を使い回す
+                    # （作り直すと、人間が開いた URL が無効になる）
+                    reuse = self.attempt_id if (self.attempt_id and not self.expired) else None
                     res = linking.activate(
                         client, self.account_type, timeout=self.timeout,
                         interval=_POLL_INTERVAL,
                         log=lambda m, *a: logger.info("[ccv_link] " + (m % a if a else m)),
                         should_stop=self._stop.is_set,
                         on_url=_on_url,
+                        retry_attempt_id=reuse,
                     )
                     last_exc = None
                     break
                 except Exception as exc:  # noqa: BLE001
                     last_exc = exc
                     # 429 等の一時的な失敗は試行を作り直して粘る（URL は差し替わる）
-                    if self._stop.is_set() or self.expired or time.time() > deadline:
+                    if self._stop.is_set() or time.time() > deadline:
                         break
                     self.state = "pending"
                     logger.warning(
-                        f"[ccv_link] {self.email} 連携チェック失敗、再試行 {rnd + 1}/2: {exc}")
+                        f"[ccv_link] {self.email} 連携チェック失敗、再試行 {rnd + 1}/3: {exc}")
                     time.sleep(min(20.0, 3.0 * (rnd + 1)))
             if last_exc is not None:
                 raise last_exc
@@ -235,6 +250,10 @@ class LinkManager:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._sessions: dict[str, LinkSession] = {}
+        self.auto_rearm = True
+        self._watch_started = False
+        self._watch_lock = threading.Lock()
+        self._last_rearm: dict[str, float] = {}
 
     def start(self, email: str, account_type: str = "", timeout: float = 0.0,
               wait_url: float = _URL_WAIT) -> dict:
@@ -244,6 +263,7 @@ class LinkManager:
         if not db.get_registered(email):
             return {"ok": False, "error": f"{email} は registered にいない"}
 
+        self.ensure_watchdog()
         existing = self.active_for(email)
         if existing is not None:
             return {"ok": True, "reused": True, **existing.to_dict()}
@@ -279,6 +299,7 @@ class LinkManager:
         if not db.get_registered(email):
             return {"ok": False, "error": f"{email} は registered にいない"}
 
+        self.ensure_watchdog()
         # 古い試行は捨てるだけにする。まだ生きている URL を人間が踏んだケースでも、
         # その裏のスレッドが解除を拾えるように cancel せず走らせておく。
         with self._lock:
@@ -360,6 +381,61 @@ class LinkManager:
             for k in gone:
                 self._sessions.pop(k, None)
         return len(gone)
+
+    # ── 席を外しても承認 URL を絶やさないための自動出し直し ──────────
+    def ensure_watchdog(self) -> None:
+        if self._watch_started:
+            return
+        with self._watch_lock:
+            if self._watch_started:
+                return
+            self._watch_started = True
+            threading.Thread(target=self._watch_loop, name="ccvlink-watch",
+                             daemon=True).start()
+
+    def _watch_loop(self) -> None:
+        while True:
+            time.sleep(_AUTO_REARM_INTERVAL)
+            try:
+                self.auto_rearm_tick()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[ccv_link] 自動出し直しで例外: {exc}")
+
+    def auto_rearm_tick(self, margin: float = -1.0) -> list[str]:
+        """寿命が切れた／失敗した試行に新しい承認 URL を出す。
+
+        人間が承認し終えたアカウントは、次の ``rearm`` の ``start`` が
+        ``url: null`` を返す（または ``_ccv_cleared`` が拾う）ので自然に止まる。
+        """
+        if not self.auto_rearm:
+            return []
+        margin = _AUTO_REARM_MARGIN if margin < 0 else margin
+        now = time.time()
+        due: list[str] = []
+        with self._lock:
+            sessions = list(self._sessions.values())
+        for sess in sessions:
+            # 登録フロー側が自分でポーリングしている枠は触らない
+            if sess.external or sess.state not in _AUTO_REARM_STATES:
+                continue
+            if now - self._last_rearm.get(sess.email, 0.0) < _AUTO_REARM_COOLDOWN:
+                continue
+            ttl = (float(sess.expires_at) - now) if sess.expires_at else 0.0
+            if sess.state == "error" or ttl < _AUTO_REARM_MARGIN:
+                self._last_rearm[sess.email] = now
+                due.append(sess.email)
+
+        done: list[str] = []
+        for email in due:
+            try:
+                res = self.rearm(email, wait_url=_AUTO_REARM_WAIT)
+                logger.info(f"[ccv_link] 自動出し直し {email}: "
+                            f"{'ok' if res.get('ok') else res.get('error')}")
+                done.append(email)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[ccv_link] 自動出し直し失敗 {email}: {exc}")
+            time.sleep(1.0)   # 同時に叩きすぎると start が 429 になる
+        return done
 
 
 MANAGER = LinkManager()

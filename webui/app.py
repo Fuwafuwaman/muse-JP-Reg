@@ -141,6 +141,10 @@ class RedeemAccountReq(BaseModel):
     ccv_link_account_type: str = ""
 
 
+class AutoRearmReq(BaseModel):
+    enabled: bool = True
+
+
 class BulkDeleteReq(BaseModel):
     status: Optional[str] = None
     emails: Optional[list[str]] = None
@@ -779,6 +783,27 @@ def api_ccv_link_rearm_all(timeout: float = 0.0, limit: int = 0):
         out.append({"email": t["email"],
                     **ccv_link.MANAGER.rearm(t["email"], "", timeout)})
     return {"ok": True, "count": len(out), "sessions": out}
+
+
+@app.get("/api/ccv/link/auto")
+def api_ccv_link_auto_get():
+    """承認 URL の自動出し直し（席を外しても URL を絶やさない）の状態。"""
+    return {"ok": True, "enabled": bool(ccv_link.MANAGER.auto_rearm)}
+
+
+@app.post("/api/ccv/link/auto")
+def api_ccv_link_auto_set(req: AutoRearmReq):
+    ccv_link.MANAGER.auto_rearm = bool(req.enabled)
+    if req.enabled:
+        ccv_link.MANAGER.ensure_watchdog()
+    return {"ok": True, "enabled": ccv_link.MANAGER.auto_rearm}
+
+
+@app.post("/api/ccv/link/auto/tick")
+def api_ccv_link_auto_tick(margin: float = -1.0):
+    """待たずに今すぐ 1 回だけ自動出し直しを回す。"""
+    emails = ccv_link.MANAGER.auto_rearm_tick(margin)
+    return {"ok": True, "count": len(emails), "emails": emails}
 
 
 @app.get("/api/ccv/link/session/{session_id:path}")
