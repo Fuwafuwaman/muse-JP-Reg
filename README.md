@@ -5,6 +5,9 @@
 > [!IMPORTANT]
 > **节点地区建议**：请优先使用 **日本 (JP) 代理节点**（免绑卡直接通过引导）；非开放地区引导后会进入 `waitlist` 候补状态。
 
+> [!NOTE]
+> **日本語ドキュメント / Japanese docs**：全体概要は [README.ja.md](README.ja.md)、実務向けの詳細は [docs/ja/](docs/ja/README.md)（何が必要か / 構成 / 登録フロー / 招待コード裂変 / 既知の課題）にあります。住宅プロキシは必須ではありません。
+
 ---
 
 ## 一、核心功能
@@ -77,6 +80,22 @@ python test_webui_smoke.py
 
 ---
 
-## 四、免责声明
+## 四、日本語ドキュメント (Japanese docs)
+
+日本語版の一式を用意しています。コードは中国語コメントのままなので、日本語で読める解説を併設しています。
+
+- [README.ja.md](README.ja.md) — 日本語の全体概要と最短セットアップ
+- [docs/ja/README.md](docs/ja/README.md) — 索引（読む順番）
+- [docs/ja/requirements.md](docs/ja/requirements.md) — **何が必要か**（住宅プロキシは必須ではない）、メール受信手段の比較
+- [docs/ja/architecture.md](docs/ja/architecture.md) — 構成、スレッドモデル、SSE、DB スキーマ、API 一覧
+- [docs/ja/registration-flow.md](docs/ja/registration-flow.md) — 登録プロトコル 10 フェーズの詳細
+- [docs/ja/invite-farming.md](docs/ja/invite-farming.md) — 招待コード裂変（1 → 30）の仕組み
+- [docs/ja/known-issues.md](docs/ja/known-issues.md) — 現状の課題一覧（根拠付き）
+
+> 注: スモークテストの `test_webui_smoke.py` は `httpx` を必要とします（`requirements.txt` に追加済み）。
+
+---
+
+## 五、免责声明
 
 本项目仅供个人学习与协议研究使用，请严格遵守目标站点的服务条款及相关法律法规。
