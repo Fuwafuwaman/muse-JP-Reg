@@ -3,6 +3,7 @@ import { computed, onActivated, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getMailConfig, getMailProviders, saveMailConfig, testMail } from '@/api/settings'
 import FooterToolbar from '@/components/FooterToolbar.vue'
+import { t, localizeLog } from '@/i18n'
 
 const providers = ref([])
 const source = ref('icloud_relay')
@@ -20,7 +21,7 @@ const canTest = computed(() => !!current.value && !current.value.pooled)
 
 function phFor(f) {
   if (f.type === 'password' && saved.value[f.key] === '***') {
-    return '已设置（留空则不修改）'
+    return t('已设置（留空则不修改）')
   }
   return f.placeholder || ''
 }
@@ -64,14 +65,14 @@ async function save() {
       return !v && !(f.type === 'password' && saved.value[f.key] === '***')
     })
   if (missing.length) {
-    ElMessage.warning('还没填：' + missing.map((f) => f.label).join('、'))
+    ElMessage.warning(t('还没填：') + missing.map((f) => f.label).join('、'))
     return
   }
 
   saving.value = true
   try {
     await saveMailConfig(payload)
-    ElMessage.success('邮箱来源已保存')
+    ElMessage.success(t('邮箱来源已保存'))
     await load()
   } catch (e) {
     ElMessage.error(e.message)
@@ -84,9 +85,9 @@ async function test() {
   testing.value = true
   try {
     const r = await testMail()
-    ElMessage.success(r.message || '连通正常')
+    ElMessage.success(localizeLog(r.message || '') || t('连通正常'))
   } catch (e) {
-    ElMessage.error(e.message)
+    ElMessage.error(localizeLog(e.message))
   } finally {
     testing.value = false
   }
@@ -100,17 +101,16 @@ load()
   <div class="page" v-loading="loading">
     <el-card shadow="never" style="max-width: 720px">
       <template #header>
-        <span class="section-title" style="margin: 0">邮箱来源配置</span>
+        <span class="section-title" style="margin: 0">{{ t('邮箱来源配置') }}</span>
       </template>
-      <p class="hint">
-        <code>muse.ai</code> 注册走无密码邮箱 6 位验证码（OTP）认证。默认推荐使用 <b>iCloud 中转 / OTP 链接池</b>（直接联动本地 4173 工作台或 <code>otp-urls.txt</code>）。
+      <p class="hint" v-html="t('HTML:邮箱来源说明')">
       </p>
 
       <el-form label-position="top">
-        <el-form-item label="当前启用的邮箱来源">
+        <el-form-item :label="t('当前启用的邮箱来源')">
           <el-radio-group v-model="source">
             <el-radio v-for="p in providers" :key="p.kind" :value="p.kind">
-              {{ p.display_name }}
+              {{ localizeLog(p.display_name) }}
             </el-radio>
           </el-radio-group>
         </el-form-item>
@@ -118,47 +118,47 @@ load()
         <el-form-item v-if="current">
           <div class="caps">
             <el-tag size="small" :type="current.pooled ? 'warning' : 'success'">
-              {{ current.pooled ? '号池型：从邮箱列表逐个领取' : '自建型：自动生成地址，无限量' }}
+              {{ current.pooled ? t('号池型：从邮箱列表逐个领取') : t('自建型：自动生成地址，无限量') }}
             </el-tag>
             <el-tag size="small" :type="current.ephemeral ? 'success' : 'info'">
-              {{ current.ephemeral ? '每次新地址' : '固定邮箱地址' }}
+              {{ current.ephemeral ? t('每次新地址') : t('固定邮箱地址') }}
             </el-tag>
             <el-tag v-if="current.line_segments > 0" size="small" type="info">
-              导入格式 {{ current.line_segments }} 段
+              {{ t('导入格式 {n} 段', { n: current.line_segments }) }}
             </el-tag>
           </div>
         </el-form-item>
 
-        <el-form-item v-for="f in fields" :key="f.key" :label="f.label">
+        <el-form-item v-for="f in fields" :key="f.key" :label="localizeLog(f.label)">
           <el-input
             v-model="form[f.key]"
             :type="f.type === 'password' ? 'password' : 'text'"
             :show-password="f.type === 'password'"
             :placeholder="phFor(f)"
           />
-          <div v-if="f.help" class="hint" style="margin-top: 4px">{{ f.help }}</div>
+          <div v-if="f.help" class="hint" style="margin-top: 4px">{{ localizeLog(f.help) }}</div>
         </el-form-item>
 
         <el-alert
           v-if="current && !current.pooled && fields.length"
           type="warning" :closable="false" show-icon
-          title="自建邮箱需确保域名 catch-all 收件转发正常，能接收来自 muse.ai / meta.com 的验证码邮件。"
+          :title="t('自建邮箱需确保域名 catch-all 收件转发正常，能接收来自 muse.ai / meta.com 的验证码邮件。')"
         />
 
         <el-alert
           v-if="current && current.pooled"
           type="info" :closable="false" show-icon
-          :title="`${current.display_name} 无需配置全局密钥，请前往「导入邮箱」页一键同步 4173 或粘贴邮箱列表。`"
+          :title="t('{name} 无需配置全局密钥，请前往「导入邮箱」页一键同步 4173 或粘贴邮箱列表。', { name: localizeLog(current.display_name) })"
         />
       </el-form>
     </el-card>
 
     <FooterToolbar>
       <template #left>
-        当前邮箱来源：{{ current?.display_name || source }}
+        {{ t('当前邮箱来源：') }}{{ current?.display_name || source }}
       </template>
-      <el-button v-if="canTest" :loading="testing" @click="test">测试连通性</el-button>
-      <el-button type="primary" :loading="saving" @click="save">保存配置</el-button>
+      <el-button v-if="canTest" :loading="testing" @click="test">{{ t('测试连通性') }}</el-button>
+      <el-button type="primary" :loading="saving" @click="save">{{ t('保存配置') }}</el-button>
     </FooterToolbar>
   </div>
 </template>

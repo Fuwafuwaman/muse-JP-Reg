@@ -10,6 +10,7 @@ import { useStatsStore } from '@/stores/stats'
 import { useRuntimeStore } from '@/stores/runtime'
 import LogPanel from '@/components/LogPanel.vue'
 import StatusDot from '@/components/StatusDot.vue'
+import { t, localizeLog } from '@/i18n'
 
 const router = useRouter()
 const { form } = storeToRefs(useFormStore())
@@ -25,7 +26,7 @@ const canPause = computed(() => st.value === 'running')
 const canResume = computed(() => st.value === 'paused')
 const canStop = computed(() => st.value !== 'stopped')
 
-const stateLabel = computed(() => ({
+const stateLabel = computed(() => t({
   stopped: '未运行', running: '运行中', paused: '已暂停',
 }[st.value] || st.value))
 const stateType = computed(() => ({
@@ -53,102 +54,101 @@ async function start() {
       auto_pool_own_code: !!form.value.autoPoolOwnCodeBatch,
       stop_on_reject: !!form.value.autoStopOnReject,
     })
-    ElMessage.success('Muse 批量调度已启动')
-  } catch (e) { ElMessage.error('启动失败: ' + e.message) }
+    ElMessage.success(t('Muse 批量调度已启动'))
+  } catch (e) { ElMessage.error(t('启动失败: ') + e.message) }
 }
 
 async function call(fn, name) {
   try {
     await fn()
     if (name === '恢复') runtime.dismissBanner()
-    ElMessage.success(name + ' 成功')
-  } catch (e) { ElMessage.error(name + ' 失败: ' + e.message) }
+    ElMessage.success(t(name) + ' ' + t('成功'))
+  } catch (e) { ElMessage.error(t(name) + ' ' + t('失败') + ': ' + e.message) }
 }
 </script>
 
 <template>
   <div class="page">
     <el-card shadow="never" style="margin-bottom: 16px">
-      <template #header><span class="section-title" style="margin: 0">全自动批量注册与裂变调度</span></template>
+      <template #header><span class="section-title" style="margin: 0">{{ t('全自动批量注册与裂变调度') }}</span></template>
 
       <el-space wrap :size="16" style="margin-bottom: 14px">
-        <el-form-item label="并发 Worker" style="margin: 0">
+        <el-form-item :label="t('并发 Worker')" style="margin: 0">
           <el-input-number v-model="form.autoConcurrency" :min="1" :max="20" />
         </el-form-item>
-        <el-form-item label="单 IP 上限 (max_per_ip)" style="margin: 0">
+        <el-form-item :label="t('单 IP 上限 (max_per_ip)')" style="margin: 0">
           <el-input-number v-model="form.autoMaxPerIp" :min="1" :max="50" />
         </el-form-item>
-        <el-form-item label="目标成功数 (0=不限)" style="margin: 0">
+        <el-form-item :label="t('目标成功数 (0=不限)')" style="margin: 0">
           <el-input-number v-model="form.autoTargetCount" :min="0" :max="100000" />
         </el-form-item>
-        <el-form-item label="OTP 超时(秒)" style="margin: 0">
+        <el-form-item :label="t('OTP 超时(秒)')" style="margin: 0">
           <el-input-number v-model="form.otpTimeout" :min="15" :max="300" />
         </el-form-item>
-        <el-form-item label="冷却(秒)" style="margin: 0">
+        <el-form-item :label="t('冷却(秒)')" style="margin: 0">
           <el-input-number v-model="form.autoCoolDown" :min="0" :max="120" />
         </el-form-item>
       </el-space>
 
-      <el-form-item label="邀请码与裂变策略" style="margin-bottom: 12px">
+      <el-form-item :label="t('邀请码与裂变策略')" style="margin-bottom: 12px">
         <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap">
           <el-radio-group v-model="form.autoRedeemMode">
-            <el-radio value="pool">从邀请码池自动兑换（余 {{ invites.remaining_uses }} 次）</el-radio>
-            <el-radio value="none">仅注册激活（不兑码）</el-radio>
+            <el-radio value="pool">{{ t('从邀请码池自动兑换（余 {n} 次）', { n: invites.remaining_uses }) }}</el-radio>
+            <el-radio value="none">{{ t('仅注册激活（不兑码）') }}</el-radio>
           </el-radio-group>
           <el-checkbox v-if="form.autoRedeemMode === 'pool'" v-model="form.autoPoolOwnCodeBatch">
-            新号产出的自有邀请码自动入池裂变
+            {{ t('新号产出的自有邀请码自动入池裂变') }}
           </el-checkbox>
-          <el-button size="small" @click="router.push('/invites')">管理邀请码池</el-button>
+          <el-button size="small" @click="router.push('/invites')">{{ t('管理邀请码池') }}</el-button>
         </div>
       </el-form-item>
 
-      <el-form-item label="调度保护与协议选项" style="margin-bottom: 12px">
+      <el-form-item :label="t('调度保护与协议选项')" style="margin-bottom: 12px">
         <el-space wrap :size="18">
           <el-checkbox v-model="form.autoStopOnReject">
-            严格停批保护（遇地区 waitlist / 服务端拒绝 / 发码后异常自动暂停防烧号）
+            {{ t('严格停批保护（遇地区 waitlist / 服务端拒绝 / 发码后异常自动暂停防烧号）') }}
           </el-checkbox>
-          <el-checkbox v-model="form.autoResolveIp">检测出口 IP (ipify)</el-checkbox>
-          <el-checkbox v-model="form.autoSendCaa">上报 CAA 漏斗埋点</el-checkbox>
-          <el-checkbox v-model="form.autoSendFalco">上报 Falco 交互事件</el-checkbox>
+          <el-checkbox v-model="form.autoResolveIp">{{ t('检测出口 IP (ipify)') }}</el-checkbox>
+          <el-checkbox v-model="form.autoSendCaa">{{ t('上报 CAA 漏斗埋点') }}</el-checkbox>
+          <el-checkbox v-model="form.autoSendFalco">{{ t('上报 Falco 交互事件') }}</el-checkbox>
         </el-space>
-        <div class="hint" style="width: 100%; margin-top: 4px">
-          对齐 <code>muse-protocol</code> 调度语义：每个 Worker 独占一条 sticky 代理，成号满 <code>max_per_ip</code> 自动轮换下一条；发码前的网络抖动会自动换代理同邮箱重试最多 3 次，不消耗新邮箱。
+        <div class="hint" style="width: 100%; margin-top: 4px" v-html="t('HTML:调度语义提示')">
         </div>
       </el-form-item>
 
-      <el-form-item label="代理池状态" style="margin-bottom: 12px">
+      <el-form-item :label="t('代理池状态')" style="margin-bottom: 12px">
         <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
           <el-tag :type="proxyCount ? 'success' : 'warning'" effect="light">
-            {{ proxyCount ? `代理池已配 ${proxyCount} 条` : '代理池为空' }}
+            {{ proxyCount ? t('代理池已配 {n} 条', { n: proxyCount }) : t('代理池为空') }}
           </el-tag>
           <span class="hint">
-            {{ proxyCount ? 'Worker 独占 sticky 认领并按 max_per_ip 自动轮换' : '将回退使用「单次注册」页填写的单条代理' }}
+            {{ proxyCount ? t('Worker 独占 sticky 认领并按 max_per_ip 自动轮换') : t('将回退使用「单次注册」页填写的单条代理') }}
           </span>
-          <el-button size="small" @click="router.push('/proxy')">管理代理池</el-button>
+          <el-button size="small" @click="router.push('/proxy')">{{ t('管理代理池') }}</el-button>
         </div>
       </el-form-item>
 
       <el-space wrap style="margin-top: 6px">
-        <el-button type="primary" :disabled="!canStart" @click="start">启动批量</el-button>
-        <el-button :disabled="!canPause" @click="call(autoPause, '暂停')">暂停</el-button>
-        <el-button type="success" plain :disabled="!canResume" @click="call(autoResume, '恢复')">恢复运行</el-button>
-        <el-button type="danger" :disabled="!canStop" @click="call(autoStop, '停止')">停止</el-button>
+        <el-button type="primary" :disabled="!canStart" @click="start">{{ t('启动批量') }}</el-button>
+        <el-button :disabled="!canPause" @click="call(autoPause, '暂停')">{{ t('暂停') }}</el-button>
+        <el-button type="success" plain :disabled="!canResume" @click="call(autoResume, '恢复')">{{ t('恢复运行') }}</el-button>
+        <el-button type="danger" :disabled="!canStop" @click="call(autoStop, '停止')">{{ t('停止') }}</el-button>
       </el-space>
 
       <el-descriptions :column="6" border size="small" style="margin-top: 16px">
-        <el-descriptions-item label="状态"><StatusDot :type="stateType" :text="stateLabel" /></el-descriptions-item>
-        <el-descriptions-item label="成功">
+        <el-descriptions-item :label="t('状态')"><StatusDot :type="stateType" :text="stateLabel" /></el-descriptions-item>
+        <el-descriptions-item :label="t('成功')">
           <b style="color: var(--el-color-success)">{{ autoStatus.registered_ok || 0 }}</b>
           <span v-if="autoStatus.target_count"> / {{ autoStatus.target_count }}</span>
         </el-descriptions-item>
-        <el-descriptions-item label="地区受限">
+        <el-descriptions-item :label="t('地区受限')">
           <b style="color: var(--el-color-warning)">{{ autoStatus.registered_waitlist || 0 }}</b>
         </el-descriptions-item>
-        <el-descriptions-item label="失败">
+        <el-descriptions-item :label="t('失败')">
           <b style="color: var(--el-color-danger)">{{ autoStatus.registered_fail || 0 }}</b>
         </el-descriptions-item>
-        <el-descriptions-item label="换IP次数">{{ autoStatus.ip_switches || 0 }}</el-descriptions-item>
-        <el-descriptions-item label="并发">{{ autoStatus.concurrency || 1 }}</el-descriptions-item>
+        <el-descriptions-item :label="t('换IP次数')">{{ autoStatus.ip_switches || 0 }}</el-descriptions-item>
+        <el-descriptions-item :label="t('并发')">{{ autoStatus.concurrency || 1 }}</el-descriptions-item>
       </el-descriptions>
 
       <div v-if="workers.length" style="margin-top: 12px">
@@ -156,7 +156,7 @@ async function call(fn, name) {
           W{{ w.id }} · {{ w.email }} · {{ w.proxy }} ({{ w.uses }}/{{ autoStatus.max_per_ip || form.autoMaxPerIp }})
         </el-tag>
       </div>
-      <p v-if="autoStatus.last_message" class="hint" style="margin-top: 8px">{{ autoStatus.last_message }}</p>
+      <p v-if="autoStatus.last_message" class="hint" style="margin-top: 8px">{{ localizeLog(autoStatus.last_message) }}</p>
     </el-card>
 
     <el-card shadow="never">

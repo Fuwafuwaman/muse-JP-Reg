@@ -10,6 +10,7 @@ import { useProxyStore } from '@/stores/proxy'
 import { useStatsStore } from '@/stores/stats'
 import { useRuntimeStore } from '@/stores/runtime'
 import LogPanel from '@/components/LogPanel.vue'
+import { t, localizeLog } from '@/i18n'
 
 const route = useRoute()
 const router = useRouter()
@@ -32,7 +33,7 @@ onActivated(() => {
 
 const statusLabel = computed(() => {
   const s = lastRunResult.value?.status
-  return ({
+  return t({
     redeemed: '已兑换全权号',
     activated: '已激活会话 (未兑码)',
     registered_pending_redemption: '已激活 (待补兑邀请码)',
@@ -42,7 +43,7 @@ const statusLabel = computed(() => {
 
 async function run() {
   if (form.value.redeemMode === 'single' && !String(form.value.inviteCode || '').trim()) {
-    ElMessage.warning('请填写要兑换的指定邀请码，或切换为邀请码池 / 跳过兑换')
+    ElMessage.warning(t('请填写要兑换的指定邀请码，或切换为邀请码池 / 跳过兑换'))
     return
   }
   starting.value = true
@@ -65,7 +66,7 @@ async function run() {
       invite_code: (form.value.inviteCode || '').trim(),
       auto_pool_own_code: !!form.value.autoPoolOwnCode,
     })
-    runtime.addLog(`[client] 启动单次注册 run_id=${r.run_id} email=${r.email}`, 'evt')
+    runtime.addLog(t('[client] 启动单次注册 run_id={run_id} email={email}', { run_id: r.run_id, email: r.email }), 'evt')
     runtime.streamRun(r.run_id)
   } catch (e) {
     ElMessage.error(e.message)
@@ -79,20 +80,20 @@ async function copyField(email, field) {
   try {
     const { data } = await getRegistered(email)
     const val = data[field] || ''
-    if (!val) { ElMessage.warning(`${field} 为空`); return }
+    if (!val) { ElMessage.warning(t('{field} 为空', { field })); return }
     await copyText(val)
   } catch (e) {
-    ElMessage.error('读取凭证失败: ' + e.message)
+    ElMessage.error(t('读取凭证失败: ') + e.message)
   }
 }
 
 async function copyEmailSess(email) {
   try {
     const { data } = await getRegistered(email)
-    if (!data.session_token) { ElMessage.warning('hatch_sess 为空'); return }
+    if (!data.session_token) { ElMessage.warning(t('hatch_sess 为空')); return }
     await copyText(`${data.email}----${data.session_token}`)
   } catch (e) {
-    ElMessage.error('读取凭证失败: ' + e.message)
+    ElMessage.error(t('读取凭证失败: ') + e.message)
   }
 }
 </script>
@@ -102,68 +103,67 @@ async function copyEmailSess(email) {
     <el-row :gutter="16">
       <el-col :md="10" style="margin-bottom: 16px">
         <el-card shadow="never">
-          <template #header><span class="section-title" style="margin: 0">单次 Muse 注册</span></template>
+          <template #header><span class="section-title" style="margin: 0">{{ t('单次 Muse 注册') }}</span></template>
           <el-form label-position="top">
-            <el-form-item label="邮箱（留空 = 自动从号池领取下一个 available）">
-              <el-input v-model="regEmail" placeholder="留空自动选号，或填指定池内邮箱" clearable />
+            <el-form-item :label="t('邮箱（留空 = 自动从号池领取下一个 available）')">
+              <el-input v-model="regEmail" :placeholder="t('留空自动选号，或填指定池内邮箱')" clearable />
             </el-form-item>
 
-            <el-form-item label="代理节点（强烈建议使用日本 JP 节点；可从代理池选或手填）">
+            <el-form-item :label="t('代理节点（强烈建议使用日本 JP 节点；可从代理池选或手填）')">
               <el-select
                 v-model="form.proxy" filterable clearable allow-create default-first-option
-                :reserve-keyword="false" placeholder="http://user:pass@jp-host:port 或 host:port:user:pass"
+                :reserve-keyword="false" :placeholder="t('http://user:pass@jp-host:port 或 host:port:user:pass')"
                 style="width: 100%"
               >
                 <el-option v-for="p in proxyList" :key="p" :label="p" :value="p" />
               </el-select>
-              <div class="hint" style="margin-top: 4px">
-                支持 <code>http://</code>、<code>socks5://</code>（自动转远端 DNS <code>socks5h://</code>）及 <code>host:port:user:pass</code> 四段格式。
+              <div class="hint" style="margin-top: 4px" v-html="t('HTML:支持 http socks5 及四段格式')">
               </div>
             </el-form-item>
 
-            <el-form-item label="邀请码兑换策略">
+            <el-form-item :label="t('邀请码兑换策略')">
               <el-radio-group v-model="form.redeemMode">
                 <el-radio value="pool">
-                  从邀请码池取码（余 {{ invites.remaining_uses }} 次）
+                  {{ t('从邀请码池取码（余 {n} 次）', { n: invites.remaining_uses }) }}
                 </el-radio>
-                <el-radio value="single">指定邀请码</el-radio>
-                <el-radio value="none">跳过兑换（仅注册激活）</el-radio>
+                <el-radio value="single">{{ t('指定邀请码') }}</el-radio>
+                <el-radio value="none">{{ t('跳过兑换（仅注册激活）') }}</el-radio>
               </el-radio-group>
               <div v-if="form.redeemMode === 'single'" style="margin-top: 8px; width: 100%">
-                <el-input v-model="form.inviteCode" class="mono" placeholder="输入要兑换的 Muse 邀请码" clearable />
+                <el-input v-model="form.inviteCode" class="mono" :placeholder="t('输入要兑换的 Muse 邀请码')" clearable />
               </div>
               <div v-if="form.redeemMode === 'pool' && !invites.remaining_uses" class="hint" style="margin-top: 6px; color: var(--el-color-warning)">
-                提示：当前邀请码池为空，将自动保留已激活账号（可先去
-                <el-button link type="primary" @click="router.push('/invites')">邀请码池</el-button>
-                添加种子码）。
+                {{ t('提示：当前邀请码池为空，将自动保留已激活账号（可先去') }}
+                <el-button link type="primary" @click="router.push('/invites')">{{ t('邀请码池') }}</el-button>
+                {{ t('添加种子码）。') }}
               </div>
             </el-form-item>
 
             <el-form-item v-if="form.redeemMode !== 'none'">
               <div style="display: flex; align-items: center; gap: 10px">
                 <el-switch v-model="form.autoPoolOwnCode" />
-                <span>兑换后产出的自有邀请码自动回流至邀请码池（1 裂变 30）</span>
+                <span>{{ t('兑换后产出的自有邀请码自动回流至邀请码池（1 裂变 30）') }}</span>
               </div>
             </el-form-item>
 
             <div style="margin-bottom: 12px">
               <el-button text size="small" type="primary" @click="showAdvanced = !showAdvanced">
-                {{ showAdvanced ? '收起协议高级参数 ▲' : '展开协议高级参数（OTP超时 / 姓名生日 / 埋点）▼' }}
+                {{ showAdvanced ? t('收起协议高级参数 ▲') : t('展开协议高级参数（OTP超时 / 姓名生日 / 埋点）▼') }}
               </el-button>
             </div>
 
             <div v-if="showAdvanced" class="adv-box">
               <el-space wrap :size="12" style="margin-bottom: 10px">
-                <el-form-item label="OTP 等待(秒)" style="margin: 0">
+                <el-form-item :label="t('OTP 等待(秒)')" style="margin: 0">
                   <el-input-number v-model="form.otpTimeout" :min="15" :max="300" size="small" />
                 </el-form-item>
-                <el-form-item label="语言 (Accept-Language)" style="margin: 0">
+                <el-form-item :label="t('语言 (Accept-Language)')" style="margin: 0">
                   <el-select v-model="form.lang" size="small" style="width: 100px">
-                    <el-option label="ja (推荐)" value="ja" />
+                    <el-option :label="t('ja (推荐)')" value="ja" />
                     <el-option label="en-US" value="en-US" />
                   </el-select>
                 </el-form-item>
-                <el-form-item label="TLS 指纹" style="margin: 0">
+                <el-form-item :label="t('TLS 指纹')" style="margin: 0">
                   <el-select v-model="form.impersonate" size="small" style="width: 130px">
                     <el-option label="chrome142" value="chrome142" />
                     <el-option label="chrome136" value="chrome136" />
@@ -173,25 +173,25 @@ async function copyEmailSess(email) {
 
               <el-row :gutter="8" style="margin-bottom: 10px">
                 <el-col :span="7">
-                  <el-input v-model="form.lastName" size="small" placeholder="姓 (留空随机)" />
+                  <el-input v-model="form.lastName" size="small" :placeholder="t('姓 (留空随机)')" />
                 </el-col>
                 <el-col :span="7">
-                  <el-input v-model="form.firstName" size="small" placeholder="名 (留空随机)" />
+                  <el-input v-model="form.firstName" size="small" :placeholder="t('名 (留空随机)')" />
                 </el-col>
                 <el-col :span="10">
-                  <el-input v-model="form.dateOfBirth" size="small" placeholder="生日 1993-11-14 (留空随机)" />
+                  <el-input v-model="form.dateOfBirth" size="small" :placeholder="t('生日 1993-11-14 (留空随机)')" />
                 </el-col>
               </el-row>
 
               <el-space wrap>
-                <el-checkbox v-model="form.resolveIp" label="检测出口 IP" size="small" />
-                <el-checkbox v-model="form.sendCaa" label="CAA 漏斗埋点" size="small" />
-                <el-checkbox v-model="form.sendFalco" label="Falco 性能埋点" size="small" />
+                <el-checkbox v-model="form.resolveIp" :label="t('检测出口 IP')" size="small" />
+                <el-checkbox v-model="form.sendCaa" :label="t('CAA 漏斗埋点')" size="small" />
+                <el-checkbox v-model="form.sendFalco" :label="t('Falco 性能埋点')" size="small" />
               </el-space>
             </div>
 
             <el-button type="primary" :loading="starting || runningSingle" @click="run">
-              开始注册
+              {{ t('开始注册') }}
             </el-button>
           </el-form>
 
@@ -210,24 +210,24 @@ async function copyEmailSess(email) {
               <span v-if="lastRunResult.ip" class="hint" style="margin-left: 8px">IP: {{ lastRunResult.ip }}</span>
             </div>
             <div class="cred-line" v-if="lastRunResult.own_code">
-              <span class="cred-label">自有邀请码</span>
+              <span class="cred-label">{{ t('自有邀请码') }}</span>
               <code class="cred-val" style="font-weight: 700; color: var(--el-color-success)">{{ lastRunResult.own_code }}</code>
             </div>
             <div class="cred-line hint" v-if="lastRunResult.last_error">
-              备注: {{ lastRunResult.last_error }}
+              {{ t('备注') }}: {{ lastRunResult.last_error }}
             </div>
             <div style="margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap">
-              <el-button size="small" @click="copyText(lastRunResult.email)">复制邮箱</el-button>
+              <el-button size="small" @click="copyText(lastRunResult.email)">{{ t('复制邮箱') }}</el-button>
               <el-button v-if="lastRunResult.own_code" size="small" type="success" @click="copyText(lastRunResult.own_code)">
-                复制自有邀请码
+                {{ t('复制自有邀请码') }}
               </el-button>
               <el-button v-if="lastRunResult.session_token_len > 0" size="small" type="primary"
                          @click="copyField(lastRunResult.email, 'session_token')">
-                复制 hatch_sess ({{ lastRunResult.session_token_len }})
+                {{ t('复制 hatch_sess ({n})', { n: lastRunResult.session_token_len }) }}
               </el-button>
               <el-button v-if="lastRunResult.session_token_len > 0" size="small"
                          @click="copyEmailSess(lastRunResult.email)">
-                复制 邮箱----hatch_sess
+                {{ t('复制 邮箱----hatch_sess') }}
               </el-button>
             </div>
           </el-alert>
@@ -237,8 +237,8 @@ async function copyEmailSess(email) {
             :type="lastRunResult.registered ? 'warning' : 'error'"
             :closable="false"
             style="margin-top: 14px"
-            :title="lastRunResult.error"
-            :description="lastRunResult.registered ? '说明：该账号已完成注册并自动保存到「注册结果」表中，未丢失凭证。' : ''"
+            :title="localizeLog(lastRunResult.error)"
+            :description="lastRunResult.registered ? t('说明：该账号已完成注册并自动保存到「注册结果」表中，未丢失凭证。') : ''"
           />
         </el-card>
       </el-col>

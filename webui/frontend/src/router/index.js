@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import NProgress from 'nprogress'
+import { t } from '@/i18n'
 
 NProgress.configure({ showSpinner: false, trickleSpeed: 120, minimum: 0.15 })
 
@@ -73,7 +74,7 @@ const router = createRouter({
 
 router.beforeEach((to, from, next) => {
   NProgress.start()
-  if (to.meta?.title) document.title = `${to.meta.title} · Muse Register`
+  if (to.meta?.title) document.title = `${t(to.meta.title)} · Muse Register`
   next()
 })
 router.afterEach(() => {

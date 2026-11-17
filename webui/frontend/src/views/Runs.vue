@@ -6,6 +6,7 @@ import { listRuns } from '@/api/register'
 import { fmtTime } from '@/api/request'
 import { useRuntimeStore } from '@/stores/runtime'
 import StatusDot from '@/components/StatusDot.vue'
+import { t, localizeLog } from '@/i18n'
 
 const { dataVersion } = storeToRefs(useRuntimeStore())
 const rows = ref([])
@@ -29,8 +30,8 @@ onActivated(() => load())
     <el-card shadow="never">
       <template #header>
         <div style="display: flex; align-items: center; justify-content: space-between">
-          <span class="section-title" style="margin: 0">运行记录</span>
-          <el-button size="small" @click="load"><el-icon><Refresh /></el-icon>刷新</el-button>
+          <span class="section-title" style="margin: 0">{{ t('运行记录') }}</span>
+          <el-button size="small" @click="load"><el-icon><Refresh /></el-icon>{{ t('刷新') }}</el-button>
         </div>
       </template>
       <el-skeleton v-if="loading && !rows.length" :rows="6" animated style="padding: 8px 0" />
@@ -38,30 +39,35 @@ onActivated(() => load())
         <el-table-column prop="run_id" label="Run ID" width="145">
           <template #default="{ row }"><span class="mono">{{ row.run_id }}</span></template>
         </el-table-column>
-        <el-table-column prop="email" label="邮箱" min-width="200" show-overflow-tooltip />
-        <el-table-column label="状态" width="95">
+        <el-table-column prop="email" :label="t('邮箱')" min-width="200" show-overflow-tooltip />
+        <el-table-column :label="t('状态')" width="95">
           <template #default="{ row }">
-            <StatusDot :type="STATUS_TYPE[row.status] || 'info'" :text="row.status" />
+            <StatusDot :type="STATUS_TYPE[row.status] || 'info'" :text="t(row.status)" />
           </template>
         </el-table-column>
-        <el-table-column prop="stage" label="最终阶段" width="145">
+        <el-table-column prop="stage" :label="t('最终阶段')" width="145">
           <template #default="{ row }">
             <span v-if="row.stage" class="mono" style="font-size: 12px">{{ row.stage }}</span>
             <span v-else class="hint">—</span>
           </template>
         </el-table-column>
-        <el-table-column prop="error_category" label="分类" width="135">
+        <el-table-column prop="error_category" :label="t('分类')" width="135">
           <template #default="{ row }">
             <el-tag v-if="row.error_category" size="small" type="warning" effect="plain">{{ row.error_category }}</el-tag>
             <span v-else class="hint">—</span>
           </template>
         </el-table-column>
-        <el-table-column label="开始时间" width="160">
+        <el-table-column :label="t('开始时间')" width="160">
           <template #default="{ row }">{{ fmtTime(row.started_at) }}</template>
         </el-table-column>
-        <el-table-column prop="error" label="备注 / 错误详情" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="error" :label="t('备注 / 错误详情')" min-width="220" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.error">{{ localizeLog(row.error) }}</span>
+            <span v-else class="hint">—</span>
+          </template>
+        </el-table-column>
         <template #empty>
-          <el-empty description="暂无运行记录" :image-size="70" />
+          <el-empty :description="t('暂无运行记录')" :image-size="70" />
         </template>
       </el-table>
     </el-card>

@@ -1,10 +1,10 @@
 <script setup>
-import zhCn from 'element-plus/es/locale/lang/zh-cn'
+import { elementLocale } from '@/i18n'
 import AdminLayout from '@/layouts/AdminLayout.vue'
 </script>
 
 <template>
-  <el-config-provider :locale="zhCn">
+  <el-config-provider :locale="elementLocale">
     <AdminLayout />
   </el-config-provider>
 </template>

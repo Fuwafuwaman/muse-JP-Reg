@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
+import { localeId, t } from '@/i18n'
 
 // ────────────────────────────────────────────────────────────
 // ⭐ 后端地址统一入口
@@ -29,7 +30,7 @@ http.interceptors.response.use(
       data?.message ||
       error?.response?.statusText ||
       error?.message ||
-      '请求失败'
+      t('请求失败')
     const err = new Error(detail)
     err.status = error?.response?.status
     err.data = data
@@ -74,10 +75,10 @@ export async function copyText(text) {
       document.execCommand('copy')
       document.body.removeChild(ta)
     }
-    ElMessage.success('已复制到剪贴板')
+    ElMessage.success(t('已复制到剪贴板'))
     return true
   } catch (e) {
-    ElMessage.error('复制失败: ' + e.message)
+    ElMessage.error(t('复制失败: ') + e.message)
     return false
   }
 }
@@ -85,5 +86,5 @@ export async function copyText(text) {
 /** 时间戳(秒) -> 本地时间字符串 */
 export function fmtTime(ts) {
   if (!ts) return '-'
-  return new Date(ts * 1000).toLocaleString('zh-CN', { hour12: false })
+  return new Date(ts * 1000).toLocaleString(localeId(), { hour12: false })
 }

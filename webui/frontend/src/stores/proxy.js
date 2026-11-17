@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
+import { t } from '@/i18n'
 
 const KEY = 'muse_proxy_pool_v1'
 
@@ -68,4 +69,9 @@ export function proxyScheme(p) {
   const parts = s.split(':')
   if (parts.length === 4 && /^\d+$/.test(parts[1])) return 'http(四段认证)'
   return 'http(默认)'
+}
+
+/** 本地化后的协议标签（'http(四段认证)' / 'http(默认)' 走词典） */
+export function proxySchemeLabel(p) {
+  return t(proxyScheme(p))
 }

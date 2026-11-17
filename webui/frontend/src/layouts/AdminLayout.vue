@@ -6,6 +6,7 @@ import { useThemeStore } from '@/stores/theme'
 import { useStatsStore } from '@/stores/stats'
 import { useRuntimeStore } from '@/stores/runtime'
 import captainLogo from '@/assets/captain-logo.png'
+import { LANGS, lang, setLang, t } from '@/i18n'
 
 const route = useRoute()
 const router = useRouter()
@@ -35,7 +36,7 @@ const crumb = computed(() => [route.meta.group, route.meta.title].filter(Boolean
 const menuOptions = computed(() =>
   router.getRoutes()
     .filter((r) => r.meta?.title)
-    .map((r) => ({ value: r.path, label: `${r.meta.group} / ${r.meta.title}` })),
+    .map((r) => ({ value: r.path, label: `${t(r.meta.group)} / ${t(r.meta.title)}` })),
 )
 const search = ref('')
 function onSearch(path) {
@@ -67,10 +68,10 @@ onMounted(() => {
       </div>
       <el-scrollbar>
         <el-menu :default-active="activeMenu" router :collapse="collapse" class="side-menu">
-          <el-menu-item-group v-for="grp in groups" :key="grp.name" :title="collapse ? '' : grp.name">
+          <el-menu-item-group v-for="grp in groups" :key="grp.name" :title="collapse ? '' : t(grp.name)">
             <el-menu-item v-for="r in grp.items" :key="r.path" :index="r.path">
               <el-icon><component :is="r.meta.icon" /></el-icon>
-              <template #title>{{ r.meta.title }}</template>
+              <template #title>{{ t(r.meta.title) }}</template>
             </el-menu-item>
           </el-menu-item-group>
         </el-menu>
@@ -84,36 +85,39 @@ onMounted(() => {
             <el-icon :size="18"><Fold v-if="!collapse" /><Expand v-else /></el-icon>
           </el-button>
           <el-breadcrumb separator="/">
-            <el-breadcrumb-item v-for="c in crumb" :key="c">{{ c }}</el-breadcrumb-item>
+            <el-breadcrumb-item v-for="c in crumb" :key="c">{{ t(c) }}</el-breadcrumb-item>
           </el-breadcrumb>
         </div>
         <div class="right">
           <el-select
-            v-model="search" filterable clearable placeholder="搜索菜单"
+            v-model="search" filterable clearable :placeholder="t('搜索菜单')"
             size="small" class="search-box" @change="onSearch"
           >
             <el-option v-for="o in menuOptions" :key="o.value" :label="o.label" :value="o.value" />
           </el-select>
           <div class="pills">
             <el-tag v-for="p in statPills" :key="p.label" :type="p.type" size="small" effect="plain">
-              {{ p.label }} <b>{{ p.value }}</b>
+              {{ t(p.label) }} <b>{{ p.value }}</b>
             </el-tag>
           </div>
-          <el-tooltip :content="theme.dark ? '浅色模式' : '深色模式'">
+          <el-select
+            :model-value="lang" size="small" class="lang-box"
+            :title="t('切换界面语言')" @change="setLang"
+          >
+            <el-option v-for="l in LANGS" :key="l.value" :label="l.label" :value="l.value" />
+          </el-select>
+          <el-tooltip :content="t(theme.dark ? '浅色模式' : '深色模式')">
             <el-button circle text @click="theme.toggle">
               <el-icon :size="18"><Moon v-if="!theme.dark" /><Sunny v-else /></el-icon>
             </el-button>
-          </el-tooltip>
-        </div>
+          </el-tooltip>        </div>
       </el-header>
 
       <el-main class="content">
         <div v-if="!tipDismissed" class="tip-banner">
           <div class="tip-content">
             <el-icon :size="16" style="color: #409eff; flex-shrink: 0"><InfoFilled /></el-icon>
-            <span>
-              <b>协议提示</b>：注册 <code>muse.ai</code> 请优先使用 <b>日本 (JP) 代理节点</b>（免绑卡直过）；非开放地区引导后会进入 <code>waitlist</code> 候补状态。
-            </span>
+            <span v-html="t('HTML:协议提示')"></span>
           </div>
           <el-button text size="small" class="tip-close" @click="tipDismissed = true">
             <el-icon :size="14"><Close /></el-icon>
@@ -185,6 +189,7 @@ onMounted(() => {
 .topbar .left { display: flex; align-items: center; gap: 12px; }
 .topbar .right { display: flex; align-items: center; gap: 14px; }
 .search-box { width: 180px; }
+.lang-box { width: 92px; }
 .pills { display: flex; gap: 6px; }
 .pills b { color: inherit; }
 .content { background: var(--app-content-bg); padding: 16px; }
