@@ -9,12 +9,15 @@
 - 根拠: `test_webui_smoke.py:69` が `from fastapi.testclient import TestClient` を実行しますが、`TestClient` は `httpx` に依存します。当時の `requirements.txt` には `curl-cffi` / `requests` / `fastapi` / `uvicorn` / `pydantic` しかありませんでした。
 - 影響: 推奨手順どおりに `pip install -r requirements.txt` だけを行うと、スモークテスト 3 本のうち `test_webui_smoke.py` が ImportError で落ちます。
 - 対応: `requirements.txt` に `httpx>=0.27.0` を追加する（本ドキュメント整備と同時に追加済み）。
+- 検証: Python 3.12.10 の実環境で `pip install -r requirements.txt` → `python test_webui_smoke.py` を実行し、`WebUI 全链路冒烟通过 3/3`（終了コード 0）を確認済み。`httpx` を uninstall した状態では `RuntimeError: The starlette.testclient module requires the httpx2 package to be installed.` で落ちることも確認済みです（＝この依存は実際に必要）。
+- 補足: `httpx` を入れた最新構成（fastapi 0.163.1 / starlette 1.10.0）では `starlette.testclient` が `StarletteDeprecationWarning`（`httpx2` 推奨）を出します。動作に影響はありません。`httpx2` を入れると警告は消えますが、旧 starlette は `httpx` を直接 import するため両方を残すのが無難です。
 
 ### 2. 実行環境のツールチェーンが前提化されている
 
 - 根拠: `start_webui.py:43-49` は `fastapi`/`uvicorn` の欠如だけを自動 pip インストールします。Python 本体が無い環境は対象外です。
 - 影響: Windows で `python` が Microsoft Store の実行エイリアス（0 バイト）のままだと、終了コード 9009 で何も起きません（エラーメッセージも出ません）。
-- 対応: `winget install Python.Python.3.12` などで実体を入れる。README のセットアップに明記済み。
+- 対応: `winget install --id Python.Python.3.12 --exact --scope user` などで実体を入れる。README のセットアップに明記済み。
+- 検証: このマシンで `winget` から Python 3.12.10 を導入し、`pip install -r requirements.txt` → スモーク 3 本 → `start_webui.py` 起動 → `/api/health` 200 まで通ることを確認しました。なお `winget` はユーザー PATH を更新しますが、**既に起動中のシェルは古い PATH を保持**するため、開き直すまで `python` は 9009 のままです（実測済み）。
 
 ### 3. API に認証・CSRF が無い
 

@@ -23,10 +23,12 @@
 ## セットアップ
 
 1. Python 3.10+ を実体としてインストールします（Windows の Microsoft Store エイリアスだけでは動きません）。
-   - Windows: `winget install Python.Python.3.12`
+   - Windows: `winget install --id Python.Python.3.12 --exact --scope user`
+   - インストール後は**ターミナルを開き直してください**（PATH が古いままだと `python` が Store のエイリアスに解決され、終了コード 9009 になります）。
 2. 依存をインストールします。
-   - `pip install -r requirements.txt`
+   - `python -m pip install -r requirements.txt`
    - スモークテストを実行する場合は追加で `pip install httpx`（`test_webui_smoke.py` が要求。`requirements.txt` にも追記済みなので、最新リビジョンなら不要）。
+   - 最後に出る `… is not on PATH` の警告群は `Scripts` ディレクトリに関するもので無視して構いません。
 3. 起動します。
    - `python start_webui.py --port 8766`
    - Windows なら `启动服务.bat` でも可（`../icloud` があればリレーサービスも同時起動します）。
@@ -79,6 +81,10 @@ python test_webui_smoke.py
 ```
 
 3 本ともモックで完結します（`httpx` が必要です。`requirements.txt` に追記済み）。`test_onboarding_smoke.py` は Next Flight HTML のパース、`test_runner_smoke.py` はリトライとスティッキープロキシ、`test_webui_smoke.py` は WebUI の一連の流れを検証します。
+
+Python 3.12.10 / ネットワーク接続なしの環境で実行して、`冒烟通过 6/6` / `冒烟通过 9/9` / `WebUI 全链路冒烟通过 3/3`（すべて終了コード 0）になることを確認済みです。3 本が緑でも外部 API の仕様変更は検出できないため、実登録は別途 1 件試してください。
+
+最新の fastapi/starlette では `StarletteDeprecationWarning`（`httpx` ではなく `httpx2` を入れよ、という警告）が出ますが**動作に影響はありません**。消したい場合だけ `python -m pip install httpx2` を実行してください。
 
 ## 注意
 

@@ -63,9 +63,11 @@
 ネットワークを使わずに、環境が正しいことだけを確認できます。
 
 1. Python をインストール（Windows の Microsoft Store 版エイリアスだけでなく実体が必要）:
-   - `winget install Python.Python.3.12`
-2. 依存をインストール: `pip install -r requirements.txt`
+   - `winget install --id Python.Python.3.12 --exact --scope user`
+   - インストール後は**ターミナルを開き直してください**。`winget` はユーザー PATH を更新しますが、起動中のシェルは古い PATH を保持したままなので、`python` が依然として Store の 0 バイトエイリアスに解決されます（実測: 終了コード 9009 のまま）。
+2. 依存をインストール: `python -m pip install -r requirements.txt`
    - `test_webui_smoke.py:69` の `from fastapi.testclient import TestClient` は `httpx` を要求します。以前は `requirements.txt` に未記載だったため、`httpx>=0.27.0` を追記済みです（追記前のリビジョンを使う場合のみ `pip install httpx` が別途必要）。
+   - **新しい starlette（1.x 系）を使うと**、`starlette.testclient` は `httpx2` を優先し、`httpx` しか無い場合は `StarletteDeprecationWarning: Using 'httpx' with 'starlette.testclient' is deprecated; install 'httpx2' instead.` を出します。**警告だけで動作します**（実測: httpx 0.28.1 のみで `3/3` 成功）。警告を消したい場合だけ `python -m pip install httpx2` を足してください。旧 starlette は `httpx` を直接 import するため、`httpx` は残しておくのが安全です。
 3. スモークテスト 3 本を実行（すべてモックで完結、ネットワーク不要。各ファイルに `main()` があるので単体実行できます）:
    - `python test_onboarding_smoke.py`
    - `python test_runner_smoke.py`
@@ -74,9 +76,25 @@
 4. サーバ起動確認: `python start_webui.py --port 8766` → ブラウザで `http://127.0.0.1:8766` を開き、`/api/health` が返ることを確認。
    - `start_webui.py` のヘルプは既定ポートを「8765」と誤表記しますが、**実際の既定値と `webui/app.py:772` のポートは 8766** です。
 
+### 実測結果（Python 3.12.10 / Windows・ネットワーク接続なし）
+
+上記 1〜4 を通しで実行し、以下のとおり確認できています。手元で同じ出力になれば環境は正常です。
+
+| 手順 | 期待される出力 |
+| --- | --- |
+| `pip install -r requirements.txt` | `Successfully installed … httpx-0.28.1 …`（`httpx` が含まれること自体が追記修正の検証になります）、`pip check` は `No broken requirements found.` |
+| `python test_onboarding_smoke.py` | `冒烟通过 6/6`、終了コード 0 |
+| `python test_runner_smoke.py` | `冒烟通过 9/9`、終了コード 0 |
+| `python test_webui_smoke.py` | `WebUI 全链路冒烟通过 3/3`、終了コード 0 |
+| `curl http://127.0.0.1:8766/api/health` | HTTP 200 と `{"ok":true,"stats":{…},"invites":{…},"registered":{…}}` |
+
+この 3 本が緑でも**外部 API の仕様変更は検出できません**（すべてモック）。実際の登録可否は `outlook` などで 1 件流して確認してください。
+
 ## つまずきやすいポイント
 
 - **`python` が Microsoft Store のエイリアス（0 バイト）** のままだと、終了コード 9009 で何も起きません。`winget` で実体を入れてください。
+- `winget` で入れた直後に `python -V` が 9009 を返す場合、PATH が古いだけです。**ターミナルを開き直す**か、その場で PATH を読み直してください（実測で解消を確認済み）。
+- `python -m pip install` の最後に `… which is not on PATH` という警告が大量に出ますが、`Scripts` ディレクトリの警告なので**無視して構いません**（`pip` / `python` 本体は使えます）。
 - `winget` は `C:\Users\<user>\AppData\Local\Microsoft\WindowsApps\winget.exe` にあります。
 - Windows 版の起動用バッチ `启动服务.bat` は、隣の `..\icloud` の Node サーバ（ポート 4173）を先に起動しようとします。`../icloud` が無くても Muse 側（8766）は動きます。
 - 停止は `停止服务.bat`（ポート 8766 の LISTENING を `taskkill`）。
