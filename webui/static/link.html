@@ -51,9 +51,11 @@
 </div>
 <div class="note warn">
   <b>ブラウザが facebook.com に到達できないと承認は絶対に成功しません。</b>
-  FoxyProxy 等でプロキシを張っている場合、認証情報（ユーザー名/パスワード）が未設定だと
+  FoxyProxy 等でプロキシを張っている場合、認証情報（ユーザー名/パスワード）が未設定または<b>間違っている</b>と
   <code>ERR_PROXY_AUTH_UNSUPPORTED</code> になり、承認 URL は毎回エラーページになります。
-  FoxyProxy の対象プロキシに SOAX のユーザー名/パスワードを入れるか、いったん FoxyProxy を Off にして確認してください。
+  FoxyProxy の対象プロキシに SOAX のユーザー名/パスワードを入れ直すか、いったん FoxyProxy を Off にして確認してください。
+  <br>到達できていれば、承認 URL は <code>facebook.com/login/?…&amp;next=&lt;承認 URL&gt;</code> に <b>302 で飛びます</b>（＝<code>etoken</code> は保持）。
+  これはエラーではありません。プロキシのエラーページが出ていなければ、あとは<b>その画面で Meta にログインするだけ</b>で承認に戻ります。
 </div>
 <div class="note warn">
   <b>承認 URL の寿命は実測で約 17 分です。</b> 切れたら「URL 出し直す」で新しい URL を出せます（Muse 側の承認試行は作り直されます）。
