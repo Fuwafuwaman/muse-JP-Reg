@@ -49,7 +49,7 @@ Edge に FoxyProxy を入れて住宅プロキシを設定しても、**この�
 
 | 目的 | 場所 |
 | --- | --- |
-| 自動ループ（推奨） | WebUI の `/proxy`（代理池）画面に 1 行 1 個で貼り、「覆盖保存」。ブラウザの `localStorage` キー `muse_proxy_pool_v1` に保持され（`webui/frontend/src/stores/proxy.js:4`）、`/api/auto/start` の `proxy_pool` として送られます（`app.py:86`） |
+| 自動ループ（推奨） | WebUI の `/proxy`（代理池）画面に 1 行 1 個で貼り、「上書き保存」。ブラウザの `localStorage` キー `muse_proxy_pool_v1` に保持され（`webui/frontend/src/stores/proxy.js:4`）、`/api/auto/start` の `proxy_pool` として送られます（`app.py:86`） |
 | 手動で 1 件だけ | 各画面の proxy 入力欄（`MuseFlow(proxy=...)` にそのまま渡ります） |
 
 代理池画面の「测试全部 / 测试」ボタン（`webui/frontend/src/views/ProxyPool.vue:103`・同 `:147`）は `POST /api/proxy/test`（`app.py:313-351`）を呼び、**出口 IP と遅延**を表示します。直結時と違う IP が出れば経路が切り替わったと確認できます。
@@ -63,6 +63,17 @@ SOAX の JP 住宅プロキシで実際に検証した記録です。同じ症�
 3. 誤記を直すと `/api/proxy/test` が `ok:true` になり、出口 IP が `14.11.202.129`（岐阜・KDDI）と返りました。直結時の `112.69.27.49`（大阪）とは別 IP なので、経路が切り替わったことを確認できます。
 4. その状態で実クライアントを通した結果: `open_home 200` → `restart` で CSRF 取得成功 → `send_otp` が `{"registration_state": "otp_sent"}` を **7.6 秒**で返し、プロキシ経由のフローが最後まで通ることを確認済みです。
 5. なお FoxyProxy 側に同じ誤記があっても、Edge のタブは動いてしまうため「FoxyProxy では成功している」ように見えます。プロキシを使うときは **FoxyProxy の文字列ではなく、ダッシュボードの値を代理池画面に貼る**のが確実です。
+
+### 実際に代理池へ入れて動作確認した値
+
+```
+http://country-jp-network-res_mob-onerror-retry_3-bind-node-session-muse1:MaMHw6F1G1@proxy.soax.com:1337
+```
+
+- SOAX のユーザー名は `<国>-<ネットワーク種別>-<失敗時リトライ回数>-bind-node-session-<名前>` の並びで組み立てます。上の指定は **日本 (JP) / モバイル回線 / 失敗時 3 回リトライ / ノード固定 / セッション名 `muse1`** です。パスワードはパッケージキーそのもの（`MaMHw6F1G1`）です。
+- 代理池画面に貼って「上書き保存」→ 一覧に 1 行入り、形式欄が「正常」、テスト欄が「正常」＋出口 IP になりました。時間を空けて 2 回テストすると `14.11.202.129`（岐阜・KDDI）→ `219.104.128.180`（千葉・Sony）と**別 IP が返ります**（いずれも日本）。
+- ⚠️ `-session-<名前>` を含めると、その名前を共有するリクエストは**同じ IP に固定**されます。全自動バッチで IP を回したいときは、セッション名をリクエストごとに変える（`-session-` を外す）か、`max_per_ip` の分割に任せてください。
+- 全自動バッチ画面の「代理池」欄が「代理池已配 1 条」になっていれば、`proxy_pool` として `POST /api/auto/start` に送られています（`webui/frontend/src/views/AutoLoop.vue:42`）。代理池が空のときだけ「单次注册」画面の単条プロキシにフォールバックします。
 
 ### 受け付ける形式
 
@@ -102,10 +113,26 @@ SOAX の JP 住宅プロキシで実際に検証した記録です。同じ症�
 - 取込が必要なのは**プール消費型の `outlook` / `icloud_relay` だけ**です。`cf_temp` は `line_segments = 0` で、毎回自分でアドレスを発行するため号池を使いません（`mail_providers/cf_temp.py:65`）。
 - 書式は `----` 区切りで、outlook 4 段（`email----password----client_id----refresh_token`）、icloud_relay 2 段（`email----relay_url`）。画面のプルダウンで種類を**明示**してください。4 段は Outlook と Gmail が同数で自動判別できないため、自動判定はあくまで保険です（`mail_providers/base.py:460-497`）。
 - 検証は**全行まとめて**行い、1 行でも不正なら**整批拒否**（HTTP 422）で号池は一切変更されません。行番号と理由が返ります（`base.py:500-545`）。同一メールの重複・メール書式の不正もこの段階で検出。空行と `#` 行はスキップ、BOM は除去。上限は 5,000 行 / 2 MiB（`base.py:87-88`）。
+- ⚠️ **業者（接码平台）の生テキストはそのままでは貼れないことがあります。** 手元に来た 90 件のファイルは `----` ではなく `:` 区切りで、しかも並びが `email:password:refresh_token:client_id` と**後ろ 2 つが逆**でした。`parse_line` は 4 段の**並び順を厳密に**見るので、そのまま貼ると `client_id` と `refresh_token` が入れ替わって入り、受信時に `invalid_client` になります。変換は同梱の `convert_outlook_txt.py` が使えます（後述）。
 - 既に居るメールは `kind` / `refresh_token` / `relay_url` のいずれかが変わったときだけ更新され、`available` に戻ります。同一内容なら skip です（`db.py:170-215`）。
 - ⚠️ **設定の `mail_source` と取込時の `kind` を必ず一致させてください。** `auto_loop.py:343-359` は `mail_source` と同一 `kind` の行しか claim しないため、不一致だと「可用邮箱」の数字だけが増えて 1 件も消費されません。
 - 状態は `available` → `in_use` → `done` / `failed`。`failed` は `fail_reason` を残し、**自動ループでは再使用されません**（`claim_next` は `available` のみを対象。`db.py:293-320`）。再挑戦するにはプール画面の「重置」/「重置选中」で `available` に戻します（`db.py:366` `bulk_reset_to_available`）。`in_use` のまま落ちた場合は `release_stale`（`db.py:392`、既定 1800 秒で自動解放、`app.py:37-42`）。
 - `../icloud` の 4173 を起動しておけば、取込画面の「ローカル iCloud の隠しメールを一括同期」ボタンで `unused` の隠しメールを自動投入できます（`/api/import/icloud_local` → `import_icloud.py` の `sync_icloud_to_muse`）。
+
+### 業者の生テキストを 4 段に直す（`convert_outlook_txt.py`）
+
+同じリポジトリに変換スクリプトを同梱しています。`:` 区切りの生テキストでも、既に `----` の正しい並びでも処理できます。
+
+```powershell
+python convert_outlook_txt.py "Long-term Outlook-90-xxxx.txt"          # → 入力.4seg.txt を生成
+python convert_outlook_txt.py 入力.txt -o -                            # 標準出力に出す
+python convert_outlook_txt.py 入力.txt --client-id <GUID>              # GUID が無い行の補完
+```
+
+- 第 3・4 段のうち **GUID の形をしている方を `client_id`** とみなすため、`email:password:refresh_token:client_id`（逆順）でも `email:password:client_id:refresh_token`（順序どおり）でも同じ結果になります。
+- 既に `----` 4 段の行はそのまま通します。`#` 行・空行はスキップ、BOM も除去、改行は LF に統一。
+- エラーは行番号付きで標準エラーに出て、**終了コード 1**（1 行でもあれば）。変換結果はそのまま「メール取込」画面に貼れます。
+- 出力は必ず目視か `python mail_outlook.py '<1 行>'` で 1 件確認してから取り込んでください。
 
 ### Outlook の 4 段目・3 段目とは（`client_id` / `refresh_token`）
 
