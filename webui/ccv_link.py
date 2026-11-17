@@ -157,13 +157,30 @@ class LinkSession:
                 self.expires_at = info.get("expires_at")
                 self._url_ready.set()
 
-            res = linking.activate(
-                client, self.account_type, timeout=self.timeout,
-                interval=_POLL_INTERVAL,
-                log=lambda m, *a: logger.info("[ccv_link] " + (m % a if a else m)),
-                should_stop=self._stop.is_set,
-                on_url=_on_url,
-            )
+            deadline = time.time() + max(60.0, float(self.timeout or 0.0)) + 60.0
+            last_exc: Optional[Exception] = None
+            for rnd in range(3):
+                try:
+                    res = linking.activate(
+                        client, self.account_type, timeout=self.timeout,
+                        interval=_POLL_INTERVAL,
+                        log=lambda m, *a: logger.info("[ccv_link] " + (m % a if a else m)),
+                        should_stop=self._stop.is_set,
+                        on_url=_on_url,
+                    )
+                    last_exc = None
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    last_exc = exc
+                    # 429 等の一時的な失敗は試行を作り直して粘る（URL は差し替わる）
+                    if self._stop.is_set() or self.expired or time.time() > deadline:
+                        break
+                    self.state = "pending"
+                    logger.warning(
+                        f"[ccv_link] {self.email} 連携チェック失敗、再試行 {rnd + 1}/2: {exc}")
+                    time.sleep(min(20.0, 3.0 * (rnd + 1)))
+            if last_exc is not None:
+                raise last_exc
             action = res.get("next_action") or "pending"
             self.state = action
             if res.get("ok"):

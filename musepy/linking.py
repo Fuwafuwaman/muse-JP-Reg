@@ -61,8 +61,10 @@ ACTION_HINTS = {
 
 _POLL_INTERVAL = 3.0
 _POLL_TIMEOUT = 600.0
-# complete() が 429/5xx を返しても試行を捨てない（一時的な失敗で全体を落とさない）
-_MAX_COMPLETE_ERRORS = 5
+# complete() が 429/5xx を返しても試行を捨てない（並列実行時の一時的な 429 を耐える）。
+# errs が上限を超え、かつ連続失敗が _COMPLETE_ERROR_GRACE 秒を超えたら諦める。
+_MAX_COMPLETE_ERRORS = 30
+_COMPLETE_ERROR_GRACE = 60.0
 
 
 class LinkingError(RuntimeError):
@@ -149,19 +151,23 @@ def wait(client, attempt_id, timeout=_POLL_TIMEOUT, interval=_POLL_INTERVAL,
     deadline = time.time() + max(1.0, float(timeout or _POLL_TIMEOUT))
     last = None
     errs = 0
+    err_since = None
     while time.time() < deadline:
         if should_stop and should_stop():
             return "stopped"
         try:
             action = complete(client, attempt_id)
             errs = 0
+            err_since = None
         except LinkingError as exc:
             errs += 1
-            if errs > _MAX_COMPLETE_ERRORS:
+            if err_since is None:
+                err_since = time.time()
+            if errs > _MAX_COMPLETE_ERRORS and (time.time() - err_since) > _COMPLETE_ERROR_GRACE:
                 raise
             if log:
-                log("link: 完了チェック失敗（%d/%d、継続）: %s",
-                    errs, _MAX_COMPLETE_ERRORS, str(exc)[:120])
+                log("link: 完了チェック失敗（%d 回目 / 連続 %.0fs、継続）: %s",
+                    errs, time.time() - err_since, str(exc)[:120])
             time.sleep(max(0.5, min(interval * 2, 10.0)))
             continue
         if action != last:
