@@ -24,6 +24,8 @@ Instagram / Facebook アカウントを連携させても解除できる。カ�
 
 import json
 import logging
+import random
+import threading
 import time
 
 from .client import BASE, HEADERS_GET, HEADERS_JSON
@@ -61,10 +63,28 @@ ACTION_HINTS = {
 
 _POLL_INTERVAL = 3.0
 _POLL_TIMEOUT = 600.0
-# complete() が 429/5xx を返しても試行を捨てない（並列実行時の一時的な 429 を耐える）。
-# errs が上限を超え、かつ連続失敗が _COMPLETE_ERROR_GRACE 秒を超えたら諦める。
-_MAX_COMPLETE_ERRORS = 30
-_COMPLETE_ERROR_GRACE = 60.0
+# 20 件を同時に走らせると complete() が 429 を返しやすい。間隔をゆらして
+# 呼び出しの山を崩し、失敗したら指数バックオフで粘る。
+_POLL_JITTER = 0.4          # ポーリング間隔のゆらぎ（±40%）
+_MAX_ERR_BACKOFF = 12.0     # 連続失敗時の待ち時間の上限（秒）
+# それでも errs が上限を超え、かつ連続失敗が _COMPLETE_ERROR_GRACE 秒を
+# 超えたら、その試行は諦める。
+_MAX_COMPLETE_ERRORS = 60
+_COMPLETE_ERROR_GRACE = 180.0
+
+# プロセス全体で送信間隔を最低 _MIN_REQUEST_GAP 秒空ける（同時多発を平滑化）。
+_MIN_REQUEST_GAP = 0.2
+_throttle_lock = threading.Lock()
+_last_request = 0.0
+
+
+def _throttle() -> None:
+    global _last_request
+    with _throttle_lock:
+        gap = time.time() - _last_request
+        if gap < _MIN_REQUEST_GAP:
+            time.sleep(_MIN_REQUEST_GAP - gap)
+        _last_request = time.time()
 
 
 class LinkingError(RuntimeError):
@@ -72,6 +92,7 @@ class LinkingError(RuntimeError):
 
 
 def _get_json(client, path):
+    _throttle()
     r = client.s.get(BASE + path, impersonate=client.fp,
                      headers=client._h(HEADERS_GET))
     try:
@@ -81,6 +102,7 @@ def _get_json(client, path):
 
 
 def _post_json(client, path, body):
+    _throttle()
     r = client.s.post(BASE + path, impersonate=client.fp,
                       headers=client._h(HEADERS_JSON), data=json.dumps(body))
     try:
@@ -152,6 +174,7 @@ def wait(client, attempt_id, timeout=_POLL_TIMEOUT, interval=_POLL_INTERVAL,
     last = None
     errs = 0
     err_since = None
+    backoff = max(1.0, interval)
     while time.time() < deadline:
         if should_stop and should_stop():
             return "stopped"
@@ -159,6 +182,7 @@ def wait(client, attempt_id, timeout=_POLL_TIMEOUT, interval=_POLL_INTERVAL,
             action = complete(client, attempt_id)
             errs = 0
             err_since = None
+            backoff = max(1.0, interval)
         except LinkingError as exc:
             errs += 1
             if err_since is None:
@@ -168,7 +192,8 @@ def wait(client, attempt_id, timeout=_POLL_TIMEOUT, interval=_POLL_INTERVAL,
             if log:
                 log("link: 完了チェック失敗（%d 回目 / 連続 %.0fs、継続）: %s",
                     errs, time.time() - err_since, str(exc)[:120])
-            time.sleep(max(0.5, min(interval * 2, 10.0)))
+            backoff = min(_MAX_ERR_BACKOFF, backoff * 1.7)
+            time.sleep(backoff * random.uniform(0.7, 1.3))
             continue
         if action != last:
             if log:
@@ -176,7 +201,8 @@ def wait(client, attempt_id, timeout=_POLL_TIMEOUT, interval=_POLL_INTERVAL,
             last = action
         if action != "pending":
             return action
-        time.sleep(max(0.5, interval))
+        time.sleep(max(0.5, interval * random.uniform(1 - _POLL_JITTER,
+                                                     1 + _POLL_JITTER)))
     return "pending"
 
 
