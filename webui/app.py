@@ -719,6 +719,27 @@ def api_ccv_link_start(req: CcvLinkStartReq):
     return res
 
 
+@app.post("/api/ccv/link/rearm")
+def api_ccv_link_rearm(req: CcvLinkStartReq):
+    res = ccv_link.MANAGER.rearm(req.email, req.account_type, req.timeout)
+    if not res.get("ok"):
+        raise HTTPException(400, res.get("error") or "URL を出し直せない")
+    return res
+
+
+@app.post("/api/ccv/link/rearm_all")
+def api_ccv_link_rearm_all(timeout: float = 0.0, limit: int = 0):
+    """承認待ちの対象に、まとめて新しい承認 URL を出す（人間が順に踏む用）。"""
+    targets = ccv_link.pending_accounts()
+    if limit > 0:
+        targets = targets[:limit]
+    out = []
+    for t in targets:
+        out.append({"email": t["email"],
+                    **ccv_link.MANAGER.rearm(t["email"], "", timeout)})
+    return {"ok": True, "count": len(out), "sessions": out}
+
+
 @app.get("/api/ccv/link/session/{session_id:path}")
 def api_ccv_link_session(session_id: str):
     sess = ccv_link.MANAGER.get(session_id)

@@ -21,13 +21,16 @@
 年齢確認にはカード登録以外に、**Meta（Facebook / Instagram）アカウントの連携**で通る経路があります。
 
 - 契約: `GET /api/hatch/age-confirmation/linking-options` → `["instagram","facebook"]`（X/Twitter は非対応）。
-- 開始: `GET /api/hatch/age-confirmation/linking-web-auth?account_type=facebook`（**GET のみ**、POST は 405）→ `{"url":"https://www.facebook.com/fxauth/?app_id=156749723264603&…","attempt_id":"hatchagelink:<uuid>.<base64>","expires_at":…}`。`expires_at` は約 1 年後。
+- 開始: `GET /api/hatch/age-confirmation/linking-web-auth?account_type=facebook`（**GET のみ**、POST は 405）→ `{"url":"https://www.facebook.com/fxauth/?app_id=156749723264603&…","attempt_id":"hatchagelink:<uuid>.<base64>","expires_at":…}`。
+  - **`expires_at` = 承認 URL の寿命。実測で発行から約 1,050 秒（約 17.5 分）**（`now=1794937805` に対し `expires_at=1794938857`）。試行を作り直すと新しい値になります。長く放置すると URL が死ぬので、これは「有効期限」として扱ってください。
 - 完了確認: `POST /api/hatch/age-confirmation/linking-web-auth-completion` に `{"attempt_id":…}` を送り、`next_action` が `pending` 以外になるまでポーリング。
   - `continue` = 解除成功 ／ `url:null` 付き 200 = 既に連携済み（成功扱い）
   - `use_credit_card` = 連携は成立したが**カードが要る**（＝この経路の行き止まり。別の IG/FB アカウントを試す）
   - `blocked` / `retry_auth` / `restart_linking` = 再試行（`retry_attempt_id` が返る場合はそれを使う）
 - 実装: `musepy/linking.py`（クライアント）+ `webui/ccv_link.py`（背景セッション管理）+ `auth_flow.ensure_ccv`。
 - 操作: WebUI の **`http://127.0.0.1:8766/link`** を開き、「連携を開始」→ 表示された Meta URL をブラウザで開いて承認 → 画面が 2.5 秒ごとにポーリングして `continue` を検出します。フロー実行中（自動増殖中）に弾かれた場合は、登録フロー自身が URL を出すので同じページにセッションが現れます。
+  - 残り時間が各行に出ます。切れた／放置した行は **「URL 出し直す」**（`POST /api/ccv/link/rearm`）で新しい試行に置き換えられます。まとめてやる場合は `POST /api/ccv/link/rearm_all`。
+  - 一括実行（20 件など）では 1 件ずつ人間の承認が要るので、**先に登録だけ 20 件流して `ccv_link_timeout` を短く（例: 90 秒）し、あとから `/link` で「出し直す」→ 承認**と 2 段階に分けるのが現実的です。
 - 注意: ブラウザは `127.0.0.1:8766` を直接開いてください（この API は SOAX 等の住宅プロキシからだと 403 になることがあるため、WebUI 側は代理池 → 直結の順にフォールバックします）。
 
 ### カード経路（`ccv_mode=card` のとき）: **クレジット**カードが 1 枚必要

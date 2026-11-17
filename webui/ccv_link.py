@@ -110,7 +110,13 @@ class LinkSession:
         if external:
             self._url_ready.set()
 
+    @property
+    def expired(self) -> bool:
+        """承認 URL の寿命は実測で約 17 分。切れた試行は承認待ちとして数えない。"""
+        return bool(self.expires_at) and time.time() > float(self.expires_at)
+
     def to_dict(self) -> dict:
+        expired = self.expired
         return {
             "id": self.id,
             "email": self.email,
@@ -122,7 +128,13 @@ class LinkSession:
             "external": self.external,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
-            "done": self.state in linking.TERMINAL_ACTIONS or self.state == "error",
+            "expires_at": self.expires_at,
+            "expired": expired,
+            "done": (
+                self.state in linking.TERMINAL_ACTIONS
+                or self.state == "error"
+                or expired
+            ),
         }
 
     def finish(self, state: str, error: str = "") -> None:
@@ -212,13 +224,42 @@ class LinkManager:
         return out
 
     def active_for(self, email: str) -> Optional[LinkSession]:
-        """同じメールでまだ終わっていない試行があれば返す。"""
+        """同じメールでまだ終わっていない（URL も生きている）試行があれば返す。"""
         email = (email or "").strip().lower()
         with self._lock:
             for sess in self._sessions.values():
                 if sess.email == email and not sess.to_dict()["done"]:
                     return sess
         return None
+
+    def rearm(self, email: str, account_type: str = "", timeout: float = 0.0,
+              wait_url: float = _URL_WAIT) -> dict:
+        """切れた／放置した試行を捨てて、同じメールで承認 URL を出し直す。"""
+        email = (email or "").strip().lower()
+        if not email:
+            return {"ok": False, "error": "email が空"}
+        if not db.get_registered(email):
+            return {"ok": False, "error": f"{email} は registered にいない"}
+
+        # 古い試行は捨てるだけにする。まだ生きている URL を人間が踏んだケースでも、
+        # その裏のスレッドが解除を拾えるように cancel せず走らせておく。
+        with self._lock:
+            gone = [s for s in self._sessions.values() if s.email == email]
+            for k in [k for k, s in self._sessions.items() if s.email == email]:
+                self._sessions.pop(k, None)
+
+        opts = db.get_ccv_options()
+        sess = LinkSession(email, account_type or opts["ccv_link_account_type"],
+                           timeout or opts["ccv_link_timeout"])
+        with self._lock:
+            self._sessions[sess.id] = sess
+        sess.start()
+        sess.wait_url(wait_url)
+        out = {"ok": True, "rearmed": True, "replaced": len(gone), **sess.to_dict()}
+        if sess.error and not sess.url:
+            out["ok"] = False
+            out["error"] = sess.error
+        return out
 
     # ── 登録フロー側がポーリングする場合の「表示だけ」登録 ──────────
     def track(self, email: str, url: str, account_type: str = "",
