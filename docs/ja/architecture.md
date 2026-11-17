@@ -17,6 +17,7 @@ flowchart TB
         A2["SSE: /api/runs/{run_id}/stream (45秒heartbeat)"]
         A3["SSE: /api/auto/stream"]
         A4["静的配信: /static, / (webui/static をマウント)"]
+        A5["export_formats.py: 書き出し7形式 (txt/json)"]
     end
 
     subgraph CORE["オーケストレーション層"]
@@ -52,7 +53,7 @@ flowchart TB
 | 役割 | 実装 | 場所 |
 | --- | --- | --- |
 | HTTP サーバ | `uvicorn`（`start_webui.py:60-66`） | `start_webui.py` |
-| 自動運転の監督 | `threading.Thread(name="auto-loop-manage")` | `auto_loop.py:112-115` |
+| 自動運転の監督 | `threading.Thread(name="auto-loop-manage")` | `auto_loop.py:101-104` |
 | 自動運転のワーカー | `threading.Thread(name="auto-loop-worker-N")` × concurrency | `auto_loop.py:290-317` |
 | 1 登録 = 1 スレッド | `threading.Thread(name=f"register-{run_id}")` | `registrar.py:257-263` |
 | プロキシ一括テスト | `ThreadPoolExecutor` | `app.py:313` 付近 |
@@ -76,11 +77,11 @@ flowchart TB
 3. 未使用行からランダムに 1 つ確保して `_proxy_claims` に記録。
 4. 全て使用中なら bad でない行を共有（プール数 < 同時実行数）。
 
-`max_per_ip` 回成功したらその行を解放し、`_pool_bad` に積んで別 IP へ切替えます（`auto_loop.py:463-470`）。`resume` 時は `_pool_bad` をクリアし、プロキシ修正後に再開できるようにします（`auto_loop.py:129-134`）。
+`max_per_ip` 回成功したらその行を解放し、`_pool_bad` に積んで別 IP へ切替えます（`auto_loop.py:463-470`）。`resume` 時は `_pool_bad.clear()` でクリアし、プロキシ修正後に再開できるようにします（`auto_loop.py:126-132`）。
 
 ## データベース
 
-`webui/db.py`。`webui/webui.db`（WAL モード）、スレッドローカル接続です（`db.py:17` 付近）。
+`webui/db.py`。`webui/webui.db`（WAL モード）、スレッドローカル接続です（`db.py:26` の `_tls` と `db.py:31` の `_conn`）。
 
 | テーブル | 主な列 | 用途 |
 | --- | --- | --- |

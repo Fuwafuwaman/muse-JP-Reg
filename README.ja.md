@@ -66,7 +66,7 @@ flowchart LR
 
 ## 結果の確認
 
-- 登録済みアカウントは「已注册」一覧で確認し、CSV / JSON / TXT 等へエクスポートできます（`/api/registered/export`）。
+- 登録済みアカウントは「已注册」一覧で確認し、`/api/registered/export` で書き出せます。形式は `webui/export_formats.py` の `FORMATS` に定義された 7 種（`email_sess` / `hatch_sess` / `email_own_code` / `own_codes` / `full_line` / `full_relay` の 6 種はタブ区切り風の 1 行テキスト、`json_all` のみ `.json` ダウンロード）。`own_codes` はそのまま招待コードプールへ再投入できます。
 - `/api/registered/check_live` で既存 `hatch_sess` を使った**生存確認**ができ、生きていれば `own_code` を抽出して招待コードプールへ自動回流します。
 - 招待コード未交換のまま残ったアカウントは、あとから `/api/registered/redeem` でまとめて交換できます（补兑）。
 
