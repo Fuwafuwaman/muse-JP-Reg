@@ -31,6 +31,7 @@ from mail_providers import (  # noqa: E402
 )
 
 from . import db, export_formats, registrar  # noqa: E402
+from . import ccv_link  # noqa: E402
 from .auto_loop import CONTROLLER as AUTO_LOOP  # noqa: E402
 
 try:
@@ -687,9 +688,60 @@ def api_save_ccv_config(req: SaveMailConfigReq):
     return {"ok": True, "config": db.get_ccv_config()}
 
 
+# ════════════════════════ 年齢確認(CCV)の SNS 連携 ════════════════════════
+
+
+class CcvLinkStartReq(BaseModel):
+    email: str = Field(..., description="対象の registered メール")
+    account_type: str = Field("", description="facebook / instagram（空なら設定値）")
+    timeout: float = Field(0.0, description="承認待ちの秒数（0 なら設定値）")
+
+
+@app.get("/api/ccv/link/targets")
+def api_ccv_link_targets():
+    return {"ok": True, "targets": ccv_link.pending_accounts()}
+
+
+@app.get("/api/ccv/link/sessions")
+def api_ccv_link_sessions(include_done: bool = True):
+    return {"ok": True, "sessions": ccv_link.MANAGER.list(include_done=include_done)}
+
+
+@app.post("/api/ccv/link/start")
+def api_ccv_link_start(req: CcvLinkStartReq):
+    res = ccv_link.MANAGER.start(req.email, req.account_type, req.timeout)
+    if not res.get("ok"):
+        raise HTTPException(400, res.get("error") or "連携を開始できない")
+    return res
+
+
+@app.get("/api/ccv/link/session/{session_id:path}")
+def api_ccv_link_session(session_id: str):
+    sess = ccv_link.MANAGER.get(session_id)
+    if not sess:
+        raise HTTPException(404, "not found")
+    return {"ok": True, **sess.to_dict()}
+
+
+@app.post("/api/ccv/link/cancel/{session_id:path}")
+def api_ccv_link_cancel(session_id: str):
+    return {"ok": ccv_link.MANAGER.cancel(session_id)}
+
+
+@app.post("/api/ccv/link/clear_done")
+def api_ccv_link_clear_done():
+    return {"ok": True, "cleared": ccv_link.MANAGER.clear_done()}
+
+
+@app.get("/link")
+def page_ccv_link():
+    return FileResponse(STATIC_DIR / "link.html")
+
+
 @app.get("/api/settings/mail")
 def api_get_mail_config():
     return {"ok": True, "config": db.get_mail_config()}
+
 
 
 @app.post("/api/settings/mail")

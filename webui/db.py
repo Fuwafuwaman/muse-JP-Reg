@@ -1080,6 +1080,30 @@ CCV_FIELDS = [
         "required": False,
         "help": "既定 JP",
     },
+    {
+        "key": "ccv_mode",
+        "label": "CCV: 解除方式",
+        "type": "text",
+        "placeholder": "card_then_link",
+        "required": False,
+        "help": "card=カードのみ / link=Instagram・Facebook 連携のみ / card_then_link=まずカード、デビット等で弾かれたら連携へ自動フォールバック(既定)。連携方式ならクレジットカード不要。",
+    },
+    {
+        "key": "ccv_link_account_type",
+        "label": "CCV: 連携アカウント",
+        "type": "text",
+        "placeholder": "facebook",
+        "required": False,
+        "help": "link 方式で使う SNS。facebook か instagram。連携時にブラウザで Meta へログインして承認する必要がある。",
+    },
+    {
+        "key": "ccv_link_timeout",
+        "label": "CCV: 連携の待ち時間(秒)",
+        "type": "text",
+        "placeholder": "600",
+        "required": False,
+        "help": "承認リンクをブラウザで開いてもらうまでの待機秒数。既定 600。0 以下なら待たずに『保留』のまま返す。",
+    },
 ]
 
 
@@ -1113,6 +1137,26 @@ def get_ccv_card() -> dict:
         "cvv": get_setting("ccv_card_cvv", "").strip(),
         "zip": get_setting("ccv_card_zip", "").strip() or "1000001",
         "country": get_setting("ccv_card_country", "").strip() or "JP",
+    }
+
+
+def get_ccv_options() -> dict:
+    """年齢確認の解除方式。既定は「カード→ダメなら SNS 連携」。"""
+    mode = get_setting("ccv_mode", "").strip().lower() or "card_then_link"
+    if mode not in ("card", "link", "card_then_link"):
+        mode = "card_then_link"
+    account_type = get_setting("ccv_link_account_type", "").strip().lower() or "facebook"
+    if account_type not in ("facebook", "instagram"):
+        account_type = "facebook"
+    raw_timeout = get_setting("ccv_link_timeout", "").strip()
+    try:
+        timeout = float(raw_timeout) if raw_timeout else 600.0
+    except ValueError:
+        timeout = 600.0
+    return {
+        "ccv_mode": mode,
+        "ccv_link_account_type": account_type,
+        "ccv_link_timeout": timeout,
     }
 
 

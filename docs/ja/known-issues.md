@@ -2,18 +2,45 @@
 
 `df27ca5` 時点のソースを読んで見つかった粗さです。優先度は「このまま運用して痛いか」で付けています。根拠は `file:line`。
 
-## 最重要（ツール外の前提）: **クレジット**カードが 1 枚必要（年齢確認 CCV）
+## 最重要（ツール外の前提）: 年齢確認 CCV の解除
 
-コード側は対応済みで、**残っている唯一のブロッカーは「実在する日本発行のクレジットカード情報」**です。
+`GET /api/hatch/ccv-status` が `ccv_required` を返すアカウントは、解除するまで `/api/hatch/*` が全部 403 です。
+解除手段は **2 通り**あり、`ccv_mode` で選べます。
+
+| `ccv_mode` | 必要なもの | 内容 |
+|---|---|---|
+| `card` | 日本発行の**クレジット**カード 1 枚 | `POST /api/checkout/*` で 1.00 USD を LIVE 与信（デビットは `1383254` で拒否）。 |
+| `link` | Facebook か Instagram のアカウント 1 つ | **カード不要**。Meta 連携（`hatchagelink:`）だけで解除。 |
+| `card_then_link`（既定） | 上記のどちらか | まずカード、デビット等で弾かれたら自動で Meta 連携に切り替えます。 |
+
+> カードが 1 枚も無い場合は `ccv_mode=link` にしてください（WebUI「設定」→ `CCV: 解除方式`）。
+> デビットカードしか無い場合も同じです。
+
+### カード不要の回避策: Meta アカウント連携（`ccv_mode=link`）
+
+年齢確認にはカード登録以外に、**Meta（Facebook / Instagram）アカウントの連携**で通る経路があります。
+
+- 契約: `GET /api/hatch/age-confirmation/linking-options` → `["instagram","facebook"]`（X/Twitter は非対応）。
+- 開始: `GET /api/hatch/age-confirmation/linking-web-auth?account_type=facebook`（**GET のみ**、POST は 405）→ `{"url":"https://www.facebook.com/fxauth/?app_id=156749723264603&…","attempt_id":"hatchagelink:<uuid>.<base64>","expires_at":…}`。`expires_at` は約 1 年後。
+- 完了確認: `POST /api/hatch/age-confirmation/linking-web-auth-completion` に `{"attempt_id":…}` を送り、`next_action` が `pending` 以外になるまでポーリング。
+  - `continue` = 解除成功 ／ `url:null` 付き 200 = 既に連携済み（成功扱い）
+  - `use_credit_card` = 連携は成立したが**カードが要る**（＝この経路の行き止まり。別の IG/FB アカウントを試す）
+  - `blocked` / `retry_auth` / `restart_linking` = 再試行（`retry_attempt_id` が返る場合はそれを使う）
+- 実装: `musepy/linking.py`（クライアント）+ `webui/ccv_link.py`（背景セッション管理）+ `auth_flow.ensure_ccv`。
+- 操作: WebUI の **`http://127.0.0.1:8766/link`** を開き、「連携を開始」→ 表示された Meta URL をブラウザで開いて承認 → 画面が 2.5 秒ごとにポーリングして `continue` を検出します。フロー実行中（自動増殖中）に弾かれた場合は、登録フロー自身が URL を出すので同じページにセッションが現れます。
+- 注意: ブラウザは `127.0.0.1:8766` を直接開いてください（この API は SOAX 等の住宅プロキシからだと 403 になることがあるため、WebUI 側は代理池 → 直結の順にフォールバックします）。
+
+### カード経路（`ccv_mode=card` のとき）: **クレジット**カードが 1 枚必要
+
 実カードで通した結果、`461935…`（PayPay 銀行発行 Visa **デビット**）はサーバに**明示的に拒否**されました。
 
 - 症状: `GET /api/hatch/ccv-status` が `{"ccv_status":"ccv_required"}` を返すアカウントは、`hasCompletedActivation` になる前に `/api/hatch/accept-tos` / `/api/hatch/stateful-sharing` / `/api/hatch/invite` / `/api/hatch/invite-code/redeem` が**すべて 403**（`POST /api/auth/check` は `hatchAdmissionInvalidated`）。→ 自分の招待コードが 1 つも出ない＝**裂変（増殖）が止まります**。
-- **デビット不可（実測）**: 実カードを入れても `POST /api/checkout/credential` が `code=1383254`「年齢確認のため、VisaまたはMastercardの**クレジットカード**を使用してください。**デビットカードは利用できません**。」を返します。BIN `461935` は PayPay 銀行発行の Visa CLASSIC **DEBIT** なので、この時点で通れません。→ **クレジットカードを用意する**のが唯一の解決策（コード修正では直りません）。
+- **デビット不可（実測）**: 実カードを入れても `POST /api/checkout/credential` が `code=1383254`「年齢確認のため、VisaまたはMastercardの**クレジットカード**を使用してください。**デビットカードは利用できません**。」を返します。BIN `461935` は PayPay 銀行発行の Visa CLASSIC **DEBIT** なので、この時点で通れません。→ クレジットカードを用意するか、`ccv_mode=link`（上記）に切り替えます。
 - 仕様: `POST /api/checkout/*` は `paymentContainerMode:"LIVE"` で、金額は常に **1.00 USD**（JPY 400 相当のダミー）。カードは Meta Pay 側で実在照会されるため、**汎用テスト PAN（`4242…` / `4111…`）は拒否**されます（`2078022` = BIN 単位の一時ブロック、`facebook.com/help/1434403039959381` へ誘導）。
 - **診断のコツ（重要）**: `otcSessionId`/`otcType` を付けて撃つと、サーバは失敗理由を汎用コード `2078011` に**丸めて隠します**。理由を見るには otc を**3 呼び出し（init / ptt/encryption-key / checkout/credential）すべてから外した**状態で 1 周させる必要があります（credential だけ外すと `2078136` になります）。`musepy/ccv.py` は `2078011`/`2078132` のとき自動で otc なしの再走を挟み、両方の理由を 1 行の例外メッセージにまとめます。
 - 既知コード: `1383254`=クレジット必須／デビット不可、`2078022`=BIN 一時停止、`2078011`=otc 併用時の汎用エラー、`2078136`=otc の片側欠落／不一致、`1353114`=平文送信、`2992007`=Luhn 不一致、`2078132`/`2078135`=PTT 破損。
-- 対応: WebUI の「設定」→ メール設定 → `CCV: カード番号` / `有効期限 (MM/YY)` / `セキュリティコード` / `郵便番号` / `国コード` に入力します（`GET/POST /api/settings/ccv`、`db.CCV_FIELDS`）。解除処理は `auth_flow.py:473-475` が `accept-tos` の直前に `_gate_ccv` / `_activate_ccv` を自動実行します。
-- 検証状態: `musepy/ccv.py`（checkout init → credential → finalize → CCV activate、`$e2ee` PTT 暗号化）は実カードで `init` / `encryption-key` まで通り、credential でサーバから**理由付き**の拒否（`1383254`）を取得済み。カードをクレジットに替えればそのまま通る想定です。
+- 対応: WebUI の「設定」→ メール設定 → `CCV: カード番号` / `有効期限 (MM/YY)` / `セキュリティコード` / `郵便番号` / `国コード` に入力します（`GET/POST /api/settings/ccv`、`db.CCV_FIELDS`）。解除処理は `auth_flow.py` が `accept-tos` の直前に `ensure_ccv` を自動実行します。
+- 検証状態: `musepy/ccv.py`（checkout init → credential → finalize、`$e2ee` PTT 暗号化）は実カードで `init` / `encryption-key` まで通り、credential でサーバから**理由付き**の拒否（`1383254`）を取得済み。`musepy/linking.py` は開始〜URL 取得〜ポーリングまで実機で疎通確認済み（`continue` 到達はブラウザ承認待ち）。
 - 注意: 解除 1 回につき 1.00 USD の与信が走ります（実課金はされませんが、カード会社側の明細に出ます）。
 
 ## P0: 動かす前に直したい

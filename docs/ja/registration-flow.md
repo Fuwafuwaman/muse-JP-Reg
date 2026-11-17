@@ -44,9 +44,18 @@ sequenceDiagram
     Note over F,S: region_waitlist ならここで例外→ registered_waitlist
     opt ccv_required のとき
         F->>C: ccv_status() → GET /api/hatch/ccv-status
-        F->>C: activate(card) → POST /api/checkout/init → /api/ptt/encryption-key → /api/checkout/credential → /api/checkout/finalize
-        C->>S: カード登録（1.00 USD の与信）で年齢確認を解除
-        Note over C,S: デビット不可。otc 付きは理由が 2078011 に丸められるため、<br/>失敗時は ccv.py が otc なしで再走して 1383254 等の実因を取得する
+        alt ccv_mode = card / card_then_link
+            F->>C: activate(card) → POST /api/checkout/init → /api/ptt/encryption-key → /api/checkout/credential → /api/checkout/finalize
+            C->>S: カード登録（1.00 USD の与信）で年齢確認を解除
+            Note over C,S: デビット不可。otc 付きは理由が 2078011 に丸められるため、<br/>失敗時は ccv.py が otc なしで再走して 1383254 等の実因を取得する
+        end
+        alt ccv_mode = link（または card 失敗時のフォールバック）
+            F->>C: linking start → GET /api/hatch/age-confirmation/linking-web-auth?account_type=facebook
+            F-->>W: on_link_url → WebUI /link ページに承認 URL を表示
+            W->>S: ブラウザで Meta 側を承認
+            F->>C: POST .../linking-web-auth-completion を pending が抜けるまでポーリング
+            Note over C,S: カード不要。continue / url:null で解除成立、<br/>use_credit_card はこの経路の行き止まり
+        end
     end
     F->>C: accept_tos(onboarding)
     C->>S: POST /api/hatch/accept-tos
@@ -81,7 +90,7 @@ sequenceDiagram
 | 6 | `confirm_otp` | コード検証。**TOS バージョンを動的抽出** | `POST /api/auth/native/confirm-otp` | `tos_content_version` | `server_rejected` |
 | 7 | `completion` | 姓名・生年月日を送信しアカウント作成 | `POST /api/auth/native/register-completion` | `frl_access_token`, `frl_account_id`, `hatch_sess` → **早落盤** | `server_rejected` |
 | 8 | `session_bootstrap` | Next Flight 会话引导、動的披露文と遷移先を解析。**地区判定の関門** | `auth.meta.com/hatch/session/bootstrap/` | `resolved_destination`, `disclosure_version` | `region_waitlist` ほか |
-| 8.5 | `ccv` | 年齢確認の解除（`ccv_required` のときだけ）。**クレジットカード必須（デビット不可）** | `GET /api/hatch/ccv-status`, `POST /api/checkout/init` → `/api/ptt/encryption-key` → `/api/checkout/credential` → `/api/checkout/finalize` | `ccv_status` / `ccv_error` | 失敗しても続行（ただし以降の hatch API は 403 のまま）。`2078011` のときは otc なしで再走して `1383254` / `2078022` を出す |
+| 8.5 | `ccv` | 年齢確認の解除（`ccv_required` のときだけ）。**カード経路はクレジット必須（デビット不可）、`ccv_mode=link` ならカード不要で Meta 連携** | カード: `GET /api/hatch/ccv-status`, `POST /api/checkout/init` → `/api/ptt/encryption-key` → `/api/checkout/credential` → `/api/checkout/finalize` ／ 連携: `GET /api/hatch/age-confirmation/linking-options` → `GET .../linking-web-auth` → `POST .../linking-web-auth-completion` | `ccv_status` / `ccv_error` | 失敗しても続行（ただし以降の hatch API は 403 のまま）。カードで `2078011` のときは otc なしで再走して `1383254` / `2078022` を出す。連携は `use_credit_card` で行き止まり |
 | 9 | `accept_tos` | 規約同意 | `POST /api/hatch/accept-tos` | 更新後 `hatch_sess` | `server_rejected` |
 | 9.5 | `wake` | クラウド VM 起こし（`wake_trigger=mount`） | `POST /api/hatch/vm/wake` | `vm_id`（HTML から抽出、失敗しても続行） | `protocol_error` |
 | 9.6 | `sharing` | stateful-sharing | `POST /api/hatch/stateful-sharing` | — | `protocol_error` |

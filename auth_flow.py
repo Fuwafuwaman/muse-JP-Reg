@@ -27,6 +27,15 @@ logger = logging.getLogger("muse.flow")
 # 在发出 OTP 邮件之前的阶段：此阶段发生网络错误零副作用，可安全释放邮箱并换代理重试
 FLOW_PRE_SEND_STAGES = PRE_SEND_STAGES | {"ip_check"}
 
+# 年齢確認(CCV)の解除手段
+CCV_MODE_CARD = "card"                    # カード登録のみ
+CCV_MODE_LINK = "link"                    # Instagram/Facebook 連携のみ
+CCV_MODE_CARD_THEN_LINK = "card_then_link"  # カード優先、失敗したら連携にフォールバック
+CCV_MODES = (CCV_MODE_CARD, CCV_MODE_LINK, CCV_MODE_CARD_THEN_LINK)
+
+# カードが弾かれたときに「カード無しでは無理」を意味するコード（＝連携に落とす価値がある）
+_CCV_CARD_REJECT_CODES = ("1383254", "2078022")
+
 
 class MuseFlowError(RuntimeError):
     """带阶段与分类元信息的流程异常，供 registrar / auto_loop 精确调度。"""
@@ -158,6 +167,10 @@ class MuseFlow:
         completion_retries: int = 4,
         completion_retry_delay: float = 20.0,
         ccv_card: Optional[dict] = None,
+        ccv_mode: str = CCV_MODE_CARD,
+        ccv_link_account_type: str = "facebook",
+        ccv_link_timeout: float = 600.0,
+        on_link_url: Optional[Callable[[str, dict], None]] = None,
         on_phase: Optional[Callable[[str, dict], None]] = None,
         on_early_save: Optional[Callable[[MuseRegisterResult], None]] = None,
         claim_pool_code: Optional[Callable[[], Optional[str]]] = None,
@@ -179,6 +192,10 @@ class MuseFlow:
         self.completion_retries = max(1, int(completion_retries or 1))
         self.completion_retry_delay = max(0.0, float(completion_retry_delay or 0.0))
         self.ccv_card = dict(ccv_card or {})
+        self.ccv_mode = (ccv_mode or CCV_MODE_CARD).strip().lower()
+        self.ccv_link_account_type = (ccv_link_account_type or "facebook").strip().lower()
+        self.ccv_link_timeout = max(30.0, float(ccv_link_timeout or 600.0))
+        self.on_link_url = on_link_url
 
         self.on_phase = on_phase
         self.on_early_save = on_early_save
@@ -223,15 +240,17 @@ class MuseFlow:
             pass
 
     def _activate_ccv(self, client: MuseClient) -> None:
-        """年齢確認 (ccv_required) をカード登録で解除する。
+        """年齢確認 (ccv_required) を解除する（カード登録 / アカウント連携）。
 
         Muse は登録直後のアカウントに年齢確認を要求し、未解除のままだと
         ``/api/hatch/invite`` と ``/api/hatch/invite-code/redeem`` が 403 になる。
         つまり解除できないと自分の招待コードを発行できず（＝増殖できない）、
         貯めた招待コードで他アカウントを承認することもできない。
-        """
-        from musepy import ccv as ccv_mod
 
+        カードがデビットだと Muse は 1383254 で弾くため、Instagram/Facebook 連携で
+        回避できるようにしてある（``ccv_mode``）。連携は承認 URL を人間がブラウザで
+        開く必要があるため、``on_link_url`` で通知する。
+        """
         status = ""
         try:
             status = client.ccv_status() or ""
@@ -243,38 +262,23 @@ class MuseFlow:
                 self.result.ccv_status = "not_required"
             return
 
-        if not self.ccv_card or not self.ccv_card.get("card_number"):
-            self.result.ccv_status = status
-            logger.warning(
-                "       ⚠️ 年齢確認が必要 (ccv_status=%s) ですがカードが未設定です。"
-                "WebUI の「設定」→ CCV カード番号 を入力してください",
-                status,
-            )
-            return
-
-        self._phase("ccv", f"       💳 年齢確認が必要 (ccv_status={status})。カードを登録します...")
-        try:
-            res = ccv_mod.activate(
-                client,
-                card_number=str(self.ccv_card.get("card_number") or "").replace(" ", "").replace("-", ""),
-                expiry=str(self.ccv_card.get("expiry") or ""),
-                cvv=str(self.ccv_card.get("cvv") or ""),
-                zip_code=str(self.ccv_card.get("zip") or "1000001"),
-                country_code=str(self.ccv_card.get("country") or "") or None,
-                log=lambda msg, *a: logger.info("       " + (msg % a if a else msg)),
-            )
-        except Exception as exc:
-            self.result.ccv_status = "failed"
-            self.result.ccv_error = str(exc)
-            logger.warning(f"       ❌ 年齢確認(CCV)の解除に失敗: {exc}")
-            return
-
-        self.result.ccv_status = "not_required"
-        logger.info(f"       ✅ 年齢確認(CCV)を解除しました credential={res.get('credential_id')}")
-        try:
-            client.refresh_onboarding()
-        except Exception:
-            pass
+        res = ensure_ccv(
+            client,
+            card=self.ccv_card,
+            mode=self.ccv_mode,
+            link_account_type=self.ccv_link_account_type,
+            link_timeout=self.ccv_link_timeout,
+            on_link_url=self.on_link_url,
+            email=self.result.email,
+            on_msg=lambda msg: self._phase("ccv", msg),
+        )
+        self.result.ccv_status = res["status"]
+        self.result.ccv_error = res["error"]
+        if res["status"] == "not_required":
+            try:
+                client.refresh_onboarding()
+            except Exception:
+                pass
 
     def _gate_ccv(self, client: MuseClient, onboarding: dict) -> dict:
         """onboarding の年齢確認ゲートを検出し、必要なら解除して最新 onboarding を返す。"""
@@ -692,39 +696,155 @@ def check_account_live(
         client.close()
 
 
-def _ensure_ccv(client: MuseClient, ccv_card: Optional[dict]) -> str:
-    """CCV 未解除ならカード登録で解除する。戻り値は解除後の ccv_status。"""
+def ensure_ccv(
+    client: MuseClient,
+    *,
+    card: Optional[dict] = None,
+    mode: str = CCV_MODE_CARD,
+    link_account_type: str = "facebook",
+    link_timeout: float = 600.0,
+    on_link_url: Optional[Callable[[str, dict], None]] = None,
+    email: str = "",
+    on_msg: Optional[Callable[[str], None]] = None,
+) -> dict:
+    """CCV が未解除なら解除する（カード登録 → 必要なら連携にフォールバック）。
+
+    戻り値 ``{"status": 解除後の ccv_status, "error": 理由, "action": link の next_action}``。
+    ``status`` が ``not_required`` なら解除成功。
+    """
+    from musepy import ccv as ccv_mod
+    from musepy import linking as linking_mod
+
+    mode = (mode or CCV_MODE_CARD).strip().lower()
+    if mode not in CCV_MODES:
+        mode = CCV_MODE_CARD
+
+    def say(msg):
+        logger.info("       " + msg)
+        if on_msg:
+            try:
+                on_msg("       " + msg)
+            except Exception:
+                pass
+
+    out = {"status": "", "error": "", "action": None}
     try:
         status = client.ccv_status() or ""
     except Exception as exc:
         logger.warning(f"       ccv-status 取得失敗: {exc}")
-        return ""
+        out["status"] = ""
+        return out
     if status in ("", "not_required"):
-        return status
-    if not ccv_card or not ccv_card.get("card_number"):
-        logger.warning(f"       ⚠️ 年齢確認が必要 (ccv_status={status}) ですがカードが未設定です")
-        return status
-    from musepy import ccv as ccv_mod
+        out["status"] = status
+        return out
 
-    logger.info(f"       💳 年齢確認 (ccv_status={status}) をカード登録で解除します...")
-    try:
-        res = ccv_mod.activate(
-            client,
-            card_number=str(ccv_card.get("card_number") or "").replace(" ", "").replace("-", ""),
-            expiry=str(ccv_card.get("expiry") or ""),
-            cvv=str(ccv_card.get("cvv") or ""),
-            zip_code=str(ccv_card.get("zip") or "1000001"),
-            country_code=str(ccv_card.get("country") or "") or None,
+    card_ok = bool(card and card.get("card_number"))
+
+    def try_card():
+        if not card_ok:
+            logger.warning(f"       ⚠️ 年齢確認が必要 (ccv_status={status}) ですがカードが未設定です")
+            return "カード未設定"
+        say(f"💳 年齢確認 (ccv_status={status}) をカード登録で解除します...")
+        try:
+            res = ccv_mod.activate(
+                client,
+                card_number=str(card.get("card_number") or "").replace(" ", "").replace("-", ""),
+                expiry=str(card.get("expiry") or ""),
+                cvv=str(card.get("cvv") or ""),
+                zip_code=str(card.get("zip") or "1000001"),
+                country_code=str(card.get("country") or "") or None,
+                log=lambda msg, *a: logger.info("       " + (msg % a if a else msg)),
+            )
+        except Exception as exc:
+            logger.warning(f"       ❌ カードでの解除に失敗: {exc}")
+            return str(exc)
+        logger.info(f"       ✅ 年齢確認(CCV)をカードで解除しました credential={res.get('credential_id')}")
+        return ""
+
+    def try_link():
+        kind = (link_account_type or "facebook").strip().lower()
+        say(f"🔗 年齢確認 (ccv_status={status}) を {kind} 連携で解除します...")
+        try:
+            info = linking_mod.start(client, kind)
+        except Exception as exc:
+            logger.warning(f"       ❌ 連携の開始に失敗: {exc}")
+            return None, str(exc)
+        if info["url"] is None:
+            logger.info("       ✅ 連携済みだったためスキップしました")
+            return "continue", ""
+        logger.info(f"       🔗 承認 URL: {info['url']}")
+        if on_link_url:
+            try:
+                on_link_url(info["url"], {"email": email, **info})
+            except Exception:
+                pass
+        say(f"👉 ブラウザで承認してください（{kind} にログイン → 許可）。最大 {link_timeout:.0f} 秒待ちます")
+        action = linking_mod.wait(
+            client, info["attempt_id"], timeout=link_timeout,
             log=lambda msg, *a: logger.info("       " + (msg % a if a else msg)),
         )
-        logger.info(f"       ✅ 年齢確認(CCV)を解除しました credential={res.get('credential_id')}")
-    except Exception as exc:
-        logger.warning(f"       ❌ 年齢確認(CCV)の解除に失敗: {exc}")
-        return "failed"
-    try:
-        return client.ccv_status() or ""
-    except Exception:
-        return ""
+        return action, ""
+
+    error = ""
+    if mode == CCV_MODE_LINK:
+        action, error = try_link()
+        if action in linking_mod.SUCCESS_ACTIONS:
+            out["status"] = "not_required"
+            return out
+        out["status"] = "failed"
+        out["action"] = action
+        out["error"] = error or f"link:{action} {linking_mod.describe(action)}"
+        _link_failure_hint(action, linking_mod)
+        return out
+
+    error = try_card()
+    if not error:
+        out["status"] = "not_required"
+        return out
+    if mode != CCV_MODE_CARD_THEN_LINK:
+        out["status"] = "failed"
+        out["error"] = error
+        return out
+
+    say("↩️ カードで解除できないため連携方式にフォールバックします")
+    if any(c in error for c in _CCV_CARD_REJECT_CODES):
+        logger.warning("       （カードが拒否された理由: クレジットカード必須 / BIN 単位の一時停止）")
+    action, error = try_link()
+    if action in linking_mod.SUCCESS_ACTIONS:
+        out["status"] = "not_required"
+        return out
+    out["status"] = "failed"
+    out["action"] = action
+    out["error"] = error or f"card:{error} / link:{action}"
+    _link_failure_hint(action, linking_mod)
+    return out
+
+
+def _link_failure_hint(action: Optional[str], linking_mod) -> None:
+    if action == "use_credit_card":
+        logger.warning("       👉 この Meta アカウントでは年齢確認に使えません。クレジットカードが必要です")
+    elif action == "timeout":
+        logger.warning("       👉 承認が完了しませんでした。URL をもう一度開いて承認してください")
+
+
+def _ensure_ccv(client: MuseClient, ccv_card: Optional[dict],
+                ccv_mode: str = CCV_MODE_CARD,
+                link_account_type: str = "facebook",
+                link_timeout: float = 600.0,
+                on_link_url: Optional[Callable[[str, dict], None]] = None,
+                email: str = "") -> str:
+    """CCV 未解除なら解除する。戻り値は解除後の ccv_status。"""
+    res = ensure_ccv(
+        client, card=ccv_card, mode=ccv_mode,
+        link_account_type=link_account_type, link_timeout=link_timeout,
+        on_link_url=on_link_url, email=email,
+    )
+    if res["status"] == "not_required":
+        try:
+            return client.ccv_status() or ""
+        except Exception:
+            return "not_required"
+    return res["status"] or "failed"
 
 
 def redeem_registered_account(
@@ -735,6 +855,10 @@ def redeem_registered_account(
     impersonate: str = "chrome142",
     lang: str = "ja",
     ccv_card: Optional[dict] = None,
+    ccv_mode: str = CCV_MODE_CARD,
+    ccv_link_account_type: str = "facebook",
+    ccv_link_timeout: float = 600.0,
+    on_link_url: Optional[Callable[[str, dict], None]] = None,
 ) -> dict:
     """对已注册（含未激活或已激活）的账号补跑会话引导 + accept_tos + wake_vm + redeem + scratch_code。"""
     sess_val = (cred.get("session_token") or "").strip()
@@ -754,7 +878,9 @@ def redeem_registered_account(
             onboarding = client.activate_session(access_token)
             # 年齢確認ゲートが残っていると accept-tos / redeem が 403 になるので解除する
             if onboarding.get("verification_required") or str(onboarding.get("ccv_status") or "") not in ("", "not_required"):
-                _ensure_ccv(client, ccv_card)
+                _ensure_ccv(client, ccv_card, ccv_mode, ccv_link_account_type,
+                            ccv_link_timeout, on_link_url,
+                            email=(cred.get("email") or ""))
                 try:
                     onboarding = client.refresh_onboarding()
                 except Exception:
@@ -762,7 +888,9 @@ def redeem_registered_account(
             client.accept_tos(onboarding)
         else:
             # アクティベーション済みでも CCV が未解除なら 403 のままなので解除しておく
-            _ensure_ccv(client, ccv_card)
+            _ensure_ccv(client, ccv_card, ccv_mode, ccv_link_account_type,
+                        ccv_link_timeout, on_link_url,
+                        email=(cred.get("email") or ""))
         # 协议要求：兑换前必须调 wake_vm，否则有效码也会误报 invalid
         vm_id = client.wake_vm()
         client.stateful_sharing()

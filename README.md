@@ -4,7 +4,7 @@
 
 > [!IMPORTANT]
 > **节点地区建议**：请优先使用 **日本 (JP) 代理节点**；非开放地区引导后会进入 `waitlist` 候补状态。
-> 另外，JP 节点虽然能跳过候补，但**仍需要一张真实的、日本银行发行的信用卡（クレジットカード）**来解除年齢確認（CCV）。实测借记卡（デビットカード，如 PayPay 銀行 BIN `461935`）会被服务端明确拒绝：`code=1383254`「年齢確認のため、VisaまたはMastercardのクレジットカードを使用してください。デビットカードは利用できません。」；通用测试卡号在 `paymentContainerMode:"LIVE"` 下也会被 Meta Pay 拒绝（`2078022`）。症状同为 `/api/hatch/*` 全部 403、拿不到自有邀请码。设置位置：「设置」→ 邮件设置 → CCV 各栏（`POST /api/settings/ccv`）。诊断技巧：带上 `otcSessionId/otcType` 时服务端会把失败原因统一压成 `2078011`，`musepy/ccv.py` 会自动去掉 otc 重跑一遍以取得真实原因。
+> 另外，JP 节点虽然能跳过候补，但**仍需要一张真实的、日本银行发行的信用卡（クレジットカード）**来解除年齢確認（CCV）。实测借记卡（デビットカード，如 PayPay 銀行 BIN `461935`）会被服务端明确拒绝：`code=1383254`「年齢確認のため、VisaまたはMastercardのクレジットカードを使用してください。デビットカードは利用できません。」；通用测试卡号在 `paymentContainerMode:"LIVE"` 下也会被 Meta Pay 拒绝（`2078022`）。症状同为 `/api/hatch/*` 全部 403、拿不到自有邀请码。设置位置：「设置」→ 邮件设置 → CCV 各栏（`POST /api/settings/ccv`）。**没有信用卡 / 只有借记卡时**，把「设置」→ `CCV: 解除方式` 改为 `link`，然后在 `/link` 页面用 Facebook / Instagram 授权即可**免卡**解除。诊断技巧：带上 `otcSessionId/otcType` 时服务端会把失败原因统一压成 `2078011`，`musepy/ccv.py` 会自动去掉 otc 重跑一遍以取得真实原因。
 
 > [!NOTE]
 > **日本語ドキュメント / Japanese docs**：全体概要は [README.ja.md](README.ja.md)、実務向けの詳細は [docs/ja/](docs/ja/README.md)（何が必要か / 構成 / 登録フロー / 招待コード裂変 / 既知の課題）にあります。住宅プロキシは必須ではありません。

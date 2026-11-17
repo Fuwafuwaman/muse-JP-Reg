@@ -14,13 +14,15 @@
 | --- | --- |
 | 必須 | Python 3.10 以上 |
 | 必須 | メール受信手段（`outlook` / `cf_temp` / `icloud_relay` のいずれか 1 つ） |
-| 必須 | 日本発行の**クレジットカード** 1 枚（年齢確認 CCV の解除用。**デビット不可**） |
+| 必須（どちらか） | 年齢確認 CCV の解除手段 = **カード**（日本発行の**クレジット**カード 1 枚、**デビット不可**）または **Meta 連携**（Facebook / Instagram 1 つ・**カード不要**） |
 | 任意 | 住宅プロキシ（無ければ直結。`waitlist` 率が高くなったら追加） |
 | 任意 | 招待コード（無ければ登録のみ。`redeem_mode=none`） |
 | 不要 | Node.js、ブラウザ、Selenium / Playwright、商用メール API |
 
 > [!IMPORTANT]
-> カードは Meta Pay 側で実在照会されます（`paymentContainerMode:"LIVE"`、1.00 USD の与信）。汎用テスト PAN（`4242…` / `4111…`）は通らず、**デビットカードも `code=1383254` で拒否**されます。CCV が未解除のアカウントは `/api/hatch/*` がすべて 403 になり、自分の招待コードが 1 枚も出ません（＝裂変が止まります）。
+> カード経路（既定の `ccv_mode=card_then_link` が最初に試します）は Meta Pay 側で実在照会されます（`paymentContainerMode:"LIVE"`、1.00 USD の与信）。汎用テスト PAN（`4242…` / `4111…`）は通らず、**デビットカードも `code=1383254` で拒否**されます。
+> **カードが無い / デビットしか無い場合は、WebUI「設定」→ `CCV: 解除方式` を `link` にして `http://127.0.0.1:8766/link` で Facebook / Instagram を承認してください（カード不要）。**
+> CCV が未解除のアカウントは `/api/hatch/*` がすべて 403 になり、自分の招待コードが 1 枚も出ません（＝裂変が止まります）。
 
 理由と根拠、プロキシ無しでの推奨設定は [docs/ja/requirements.md](docs/ja/requirements.md) にまとめています。
 
@@ -51,14 +53,16 @@
    - 取込画面のプルダウン（種類）と**設定の 邮箱来源 を必ず一致**させてください。不一致だと号池の数字だけ増えて 1 件も消費されません。1 行でも不正があると**整批が拒否**され号池は無変更です（詳細と書式は [docs/ja/requirements.md](docs/ja/requirements.md) の「取込（インポート）の書式と挙動」）。
 2. （任意）**招待コードを投入**: `/api/invites/import`、または UI の邀请码ページ。`https://muse.ai/?invite=XXXX` の URL 貼り付けも可（`db.py` の `_clean_code` が抽出）。1 枚あたり最大 30 回まで使えます。
 3. （任意）**プロキシを貼る**: 代理池画面（`/proxy`）に 1 行 1 個。空なら直結。**Edge の FoxyProxy 等は効かない**ので必ずここに貼ります（[docs/ja/requirements.md](docs/ja/requirements.md) の「ブラウザのプロキシ設定（Edge + FoxyProxy 等）は効きません」）。
-4. **動作確認**: 単発登録で 1 件通してから、バッチに進みます。
+4. **年齢確認 CCV の解除方法を用意**: カードがあればそれで OK（`card_then_link` のまま）。無い / デビットしか無ければ `http://127.0.0.1:8766/link` で Facebook / Instagram を承認します（カード不要）。解除できるまで `/api/hatch/*` は 403 で、招待コードが 1 枚も出ません。
+5. **動作確認**: 単発登録で 1 件通してから、バッチに進みます。
 
 ## 運用フロー
 
 ```mermaid
 flowchart LR
     A[メール行を投入] --> B[招待コードを投入<br/>任意]
-    B --> C{単発 or 自動}
+    B --> L[年齢確認 CCV を解除<br/>カード or /link で Meta 連携]
+    L --> C{単発 or 自動}
     C -->|"単発 /api/register"| D[ログを SSE で確認]
     C -->|"自動 /api/auto/start"| E[ワーカーが並列実行]
     E --> F{結果}

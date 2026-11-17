@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>年齢確認(CCV) を SNS 連携で解除</title>
+<style>
+  :root { --fg:#1f2328; --dim:#656d76; --line:#d0d7de; --accent:#0969da; --ok:#1a7f37; --warn:#9a6700; --err:#cf222e; --bg:#f6f8fa; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:20px 24px 60px; font-family:-apple-system,"Segoe UI","Yu Gothic UI",Meiryo,sans-serif;
+         color:var(--fg); background:#fff; line-height:1.55; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  h2 { font-size:15px; margin:24px 0 8px; }
+  .sub { color:var(--dim); font-size:13px; margin-bottom:16px; }
+  .note { background:var(--bg); border:1px solid var(--line); border-left:4px solid var(--accent);
+          border-radius:6px; padding:10px 12px; font-size:13px; margin:12px 0; }
+  .note.warn { border-left-color:var(--warn); }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  th, td { border-bottom:1px solid var(--line); padding:6px 8px; text-align:left; vertical-align:top; }
+  th { background:var(--bg); font-weight:600; }
+  code { font-family:Consolas,monospace; font-size:12px; word-break:break-all; }
+  button { font:inherit; font-size:13px; padding:5px 12px; border:1px solid var(--line);
+           border-radius:6px; background:#fff; cursor:pointer; }
+  button:hover { background:var(--bg); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.primary:hover { filter:brightness(1.08); }
+  a.go { display:inline-block; background:var(--ok); color:#fff; text-decoration:none;
+         padding:6px 14px; border-radius:6px; font-weight:600; font-size:13px; }
+  .state { font-weight:600; }
+  .state.ok { color:var(--ok); }
+  .state.pending { color:var(--warn); }
+  .state.err { color:var(--err); }
+  .empty { color:var(--dim); font-size:13px; padding:8px 0; }
+  .toolbar { display:flex; gap:8px; align-items:center; margin:8px 0 4px; }
+  .urlbox { margin-top:6px; }
+  .urlbox code { display:block; background:var(--bg); border:1px solid var(--line);
+                 border-radius:6px; padding:6px 8px; margin-top:4px; }
+</style>
+</head>
+<body>
+<h1>年齢確認(CCV) を Instagram / Facebook 連携で解除</h1>
+<div class="sub">
+  muse の <code>ccv_required</code> はクレジットカードの他に、Meta の SNS アカウント連携でも解除できます。
+  デビットカードしか無い場合はこちらが有効です。このページは <a href="/">WebUI 本体</a> の補助画面です。
+</div>
+
+<div class="note">
+  <b>手順:</b> 対象の「連携を開始」→ 表示された <b>承認する</b> ボタンで Meta にログインして承認 →
+  このページが自動で完了を検知して解除します（数十秒かかる場合があります）。
+  <br><b>1 アカウントにつき 1 回</b>の承認が必要です。ブラウザの Meta セッションが残っていれば 2 件目以降は数クリックで済みます。
+</div>
+<div class="note warn">
+  連携が「使用不可」と判定された場合 (<code>use_credit_card</code>) は、そのアカウントでは SNS 連携が使えないので、
+  クレジットカードでの解除に切り替えてください。
+</div>
+
+<h2>進行中 <span id="activeCount" class="sub"></span></h2>
+<div class="toolbar">
+  <button onclick="refresh()">今すぐ更新</button>
+  <button onclick="clearDone()">完了分を消す</button>
+  <span id="autoLabel" class="sub"></span>
+</div>
+<div id="sessions"></div>
+
+<h2>年齢確認が未解除のアカウント</h2>
+<div class="toolbar">
+  <button class="primary" onclick="startAll()">表示中のすべてを開始</button>
+  <span class="sub">連携が済んだアカウントは自動で一覧から外れます。</span>
+</div>
+<div id="targets"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let autoRefresh = true;
+let busiest = false;
+
+function stateClass(s) {
+  if (s === "continue") return "state ok";
+  if (s === "pending" || s === "starting") return "state pending";
+  return "state err";
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || j.error || ("HTTP " + r.status));
+  return j;
+}
+
+async function refresh() {
+  try {
+    const [s, t] = await Promise.all([
+      api("/api/ccv/link/sessions"),
+      api("/api/ccv/link/targets"),
+    ]);
+    renderSessions(s.sessions || []);
+    renderTargets(t.targets || []);
+  } catch (e) {
+    $("sessions").innerHTML = '<div class="empty">取得に失敗: ' + esc(e.message) + "</div>";
+  }
+}
+
+function renderSessions(list) {
+  const box = $("sessions");
+  const active = list.filter((s) => !s.done);
+  $("activeCount").textContent = active.length ? "(" + active.length + " 件)" : "";
+  if (!list.length) { box.innerHTML = '<div class="empty">まだ何も開始していません。</div>'; return; }
+  let html = "<table><tr><th style='width:190px'>メール</th><th style='width:120px'>状態</th><th>操作</th></tr>";
+  for (const s of list) {
+    html += "<tr><td><code>" + esc(s.email) + "</code><div class='sub'>" + esc(s.account_type) + "</div></td>" +
+      "<td><span class='" + stateClass(s.state) + "'>" + esc(s.state) + "</span><div class='sub'>" + esc(s.hint || "") + "</div>" +
+      (s.error ? "<div class='sub'>" + esc(s.error) + "</div>" : "") + "</td><td>";
+    if (s.url) {
+      html += "<a class='go' href='" + esc(s.url) + "' target='_blank' rel='noopener'>承認する</a> " +
+        "<button onclick=\"copyUrl('" + esc(s.url) + "')\">URL をコピー</button> ";
+    } else if (!s.done) {
+      html += "<span class='sub'>URL を取得中…</span> ";
+    }
+    if (!s.done) html += "<button onclick=\"cancel('" + esc(s.id) + "')\">中止</button>";
+    html += "</td></tr>";
+    if (s.url) html += "<tr><td colspan='3' class='urlbox'><code>" + esc(s.url) + "</code></td></tr>";
+  }
+  box.innerHTML = html + "</table>";
+}
+
+function renderTargets(list) {
+  const box = $("targets");
+  if (!list.length) { box.innerHTML = '<div class="empty">対象なし（すべて解除済み）。</div>'; return; }
+  let html = "<table><tr><th>メール</th><th style='width:110px'>CCV</th><th style='width:170px'>登録状態</th><th style='width:120px'>操作</th></tr>";
+  for (const t of list) {
+    html += "<tr><td><code>" + esc(t.email) + "</code></td><td>" + esc(t.ccv_status) + "</td>" +
+      "<td>" + esc(t.status) + "</td>" +
+      "<td><button class='primary' onclick=\"start('" + esc(t.email) + "')\">連携を開始</button></td></tr>";
+  }
+  box.innerHTML = html + "</table>";
+}
+
+function esc(v) {
+  return String(v == null ? "" : v).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function start(email) {
+  if (busiest) return;
+  busiest = true;
+  try {
+    await api("/api/ccv/link/start", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: email }),
+    });
+  } catch (e) { alert("開始に失敗: " + e.message); }
+  finally { busiest = false; refresh(); }
+}
+
+async function startAll() {
+  const emails = Array.from(document.querySelectorAll("#targets button"))
+    .map((b) => b.getAttribute("onclick").match(/'([^']+)'/)[1]);
+  for (const e of emails) { await start(e); }
+}
+
+async function cancel(id) {
+  await api("/api/ccv/link/cancel/" + encodeURIComponent(id), { method: "POST" });
+  refresh();
+}
+
+async function clearDone() {
+  await api("/api/ccv/link/clear_done", { method: "POST" });
+  refresh();
+}
+
+async function copyUrl(u) {
+  try { await navigator.clipboard.writeText(u); }
+  catch (e) { window.prompt("URL", u); }
+}
+
+document.addEventListener("visibilitychange", () => { autoRefresh = !document.hidden; });
+setInterval(() => { if (autoRefresh) refresh(); }, 2500);
+refresh();
+</script>
+</body>
+</html>

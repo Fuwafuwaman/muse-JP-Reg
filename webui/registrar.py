@@ -22,14 +22,26 @@ from mail_providers import (  # noqa: E402
     get_provider_class,
 )
 
-from . import db  # noqa: E402
+from . import ccv_link, db  # noqa: E402
 
 _run_queues: dict[str, queue.Queue] = {}
-_lock = threading.Lock()
+_run_lock = threading.Lock()
 _current_run = threading.local()
 
 LOG_DIR = Path(__file__).resolve().parent / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _finish_link_session(flow, email: str, error: str = "") -> None:
+    """/link 画面に出した承認待ちの枠を、フローの結果で終端させる。"""
+    try:
+        ccv_status = str(getattr(getattr(flow, "result", None), "ccv_status", "") or "")
+        action = "continue" if ccv_status == "not_required" else (ccv_status or "pending")
+        if action == "pending" and error:
+            action = "error"
+        ccv_link.MANAGER.finish_for(email, action, error=error)
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("webui.registrar").debug(f"[register] link 枠の終端に失敗: {exc}")
 
 
 class QueueLogHandler(logging.Handler):
@@ -112,6 +124,34 @@ def _do_register(
                 "message": info.get("message") or "",
             })
 
+        ccv_opts = db.get_ccv_options()
+        ccv_mode = str(options.get("ccv_mode") or ccv_opts["ccv_mode"]).strip()
+        ccv_account_type = str(
+            options.get("ccv_link_account_type") or ccv_opts["ccv_link_account_type"]
+        ).strip()
+        try:
+            ccv_link_timeout = float(
+                options.get("ccv_link_timeout") or ccv_opts["ccv_link_timeout"]
+            )
+        except (TypeError, ValueError):
+            ccv_link_timeout = ccv_opts["ccv_link_timeout"]
+
+        def _on_link_url(url: str, info: dict) -> None:
+            """Meta の承認 URL を 実行ログ と /link 画面の両方に出す。"""
+            owner = info.get("email") or email
+            try:
+                ccv_link.MANAGER.track(
+                    owner, url, info.get("account_type") or ccv_account_type,
+                    expires_at=info.get("expires_at"), timeout=ccv_link_timeout,
+                )
+            except Exception as e:  # noqa: BLE001
+                log.warning(f"[register] 承認URLの画面登録に失敗: {e}")
+            _emit_status(run_id, "phase", {
+                "phase": "ccv_link",
+                "email": owner,
+                "message": f"年齢確認の承認URL（ブラウザで開いて Meta にログイン）: {url}",
+            })
+
         def _on_early_save(res: MuseRegisterResult) -> None:
             db.save_registered(res.to_db_dict())
             log.info(f"[register] 账号核心凭证已早落盘: {res.email}")
@@ -138,6 +178,10 @@ def _do_register(
             completion_retries=int(options.get("completion_retries") or 4),
             completion_retry_delay=float(options.get("completion_retry_delay") or 20.0),
             ccv_card=db.get_ccv_card(),
+            ccv_mode=ccv_mode,
+            ccv_link_account_type=ccv_account_type,
+            ccv_link_timeout=ccv_link_timeout,
+            on_link_url=_on_link_url,
             on_phase=_on_phase,
             on_early_save=_on_early_save,
             claim_pool_code=db.claim_invite_code,
@@ -153,6 +197,7 @@ def _do_register(
         db.save_registered(d)
         if is_pooled:
             db.mark_done(email)
+        _finish_link_session(flow, d.get("email") or email)
 
         summary = {
             "email": d["email"],
@@ -209,6 +254,7 @@ def _do_register(
                     db.mark_failed(email, f"[{stage}/{category}] {err}")
 
         db.finish_run(run_id, "failed", err, category=category, stage=stage, email=real_email)
+        _finish_link_session(flow, real_email, error=err)
         _emit_status(run_id, "error", {
             "email": real_email,
             "message": err,
@@ -256,7 +302,7 @@ def start_registration(account: dict, options: dict) -> str:
     db.create_run(run_id, account["email"], str(log_file))
 
     q: queue.Queue = queue.Queue()
-    with _lock:
+    with _run_lock:
         _run_queues[run_id] = q
 
     th = threading.Thread(
@@ -274,5 +320,5 @@ def get_run_queue(run_id: str) -> Optional[queue.Queue]:
 
 
 def remove_run_queue(run_id: str) -> None:
-    with _lock:
+    with _run_lock:
         _run_queues.pop(run_id, None)

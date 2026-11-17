@@ -8,12 +8,17 @@
 
 1. **Python 3.10 以上**（`curl_cffi` / `fastapi` / `uvicorn` が動くこと）
 2. **メール受信手段**（Muse の OTP を受け取る先。後述の 3 方式から 1 つ）
-3. **クレジットカード 1 枚**（年齢確認 CCV の解除用。**デビット不可**）
+3. **年齢確認 CCV の解除手段**（次の**どちらか**。両方は不要）
+
+   - **日本発行のクレジットカード 1 枚**（**デビット不可**）
+   - **Facebook か Instagram のアカウント 1 つ** = **カード不要**（`ccv_mode=link`／既定の `card_then_link` ならカード失敗時に自動でこちらへ）
 
 招待コードは任意です（`redeem_mode=none` で登録のみ可能）。Node.js も不要です（ビルド済みの `webui/static/` が同梱されています）。
 
 > [!IMPORTANT]
-> 3 のカードは「実在する日本のクレジットカード」である必要があります。`paymentContainerMode:"LIVE"` の Meta Pay が実在照会するため、汎用テスト PAN（`4242…` / `4111…`）は通りません。またデビットは `code=1383254` で明示的に弾かれます（実測: PayPay 銀行発行 Visa デビット `461935…`）。CCV が未解除だと `/api/hatch/*` が全部 403 になり、自分の招待コードが 1 枚も出ません（＝裂変が止まります）。詳細は [known-issues.md](known-issues.md) の冒頭。
+> カードは「実在する日本のクレジットカード」である必要があります。`paymentContainerMode:"LIVE"` の Meta Pay が実在照会するため、汎用テスト PAN（`4242…` / `4111…`）は通りません。またデビットは `code=1383254` で明示的に弾かれます（実測: PayPay 銀行発行 Visa デビット `461935…`）。
+> **カードが無い / デビットしか無い場合は、WebUI「設定」→ `CCV: 解除方式` を `link` にして `/link` ページから Facebook / Instagram を承認してください。**
+> CCV が未解除だと `/api/hatch/*` が全部 403 になり、自分の招待コードが 1 枚も出ません（＝裂変が止まります）。詳細は [known-issues.md](known-issues.md) の冒頭。
 
 ## 必須 / 任意 / 不要
 
@@ -21,7 +26,9 @@
 | --- | --- | --- |
 | 必須 | Python 3.10+ | 実行基盤。`start_webui.py:43-49` が `fastapi`/`uvicorn` を自動 pip インストールしますが、インタプリタ自体は必要 |
 | 必須 | メール受信手段 | OTP 取得が登録フローの必須ステップ（`auth_flow.py` の `wait_otp` フェーズ） |
-| 必須 | 日本発行のクレジットカード 1 枚 | 年齢確認 CCV（`ccv_required`）の解除。`musepy/ccv.py` がカード登録で解除します。**デビット不可**（`1383254`）。WebUI「設定」→ CCV 各欄へ入力 |
+| 必須（どちらか） | 年齢確認 CCV の解除手段 | 未解除だと `/api/hatch/*` が全部 403 で招待コードが出ません。**カード**（`musepy/ccv.py`、`ccv_mode=card`）か **Meta 連携**（`musepy/linking.py` + `/link`、`ccv_mode=link`、カード不要）のどちらか。既定の `card_then_link` はカード → 失敗時に自動で Meta 連携 |
+| 条件付き必須 | 日本発行の**クレジット**カード 1 枚 | `ccv_mode=card`（または `card_then_link` で通す場合）に必要。**デビット不可**（`1383254`）。WebUI「設定」→ CCV 各欄へ入力 |
+| 条件付き必須 | Facebook / Instagram アカウント | `ccv_mode=link` に必要（X/Twitter 非対応）。WebUI `/link` ページで承認 |
 | 任意 | 住宅プロキシ | 空にすると直結で動作。`auto_loop.py:170` の `_pick_proxy` は `_proxy_pool` が空のとき `""` を返し、`MuseFlow(proxy="")` は直結で動作します |
 | 任意 | 招待コード | `redeem_mode="none"` でスキップ可。あれば登録後に枠が広がります |
 | 任意 | 固定 IP の VPS | 併用可。ただし同一 IP からの大量登録は waitlist 率が上がります |
