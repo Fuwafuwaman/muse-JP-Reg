@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
-import { localeId, t } from '@/i18n'
+import { localeId, localizeLog, t } from '@/i18n'
 
 // ────────────────────────────────────────────────────────────
 // ⭐ 后端地址统一入口
@@ -25,12 +25,14 @@ http.interceptors.response.use(
   (resp) => resp.data,
   (error) => {
     const data = error?.response?.data
-    const detail =
+    const raw =
       data?.detail ||
       data?.message ||
       error?.response?.statusText ||
       error?.message ||
       t('请求失败')
+    // 后端消息是中文原文：日文界面下交由 i18n 做词条级替换
+    const detail = typeof raw === 'string' ? localizeLog(raw) : raw
     const err = new Error(detail)
     err.status = error?.response?.status
     err.data = data
