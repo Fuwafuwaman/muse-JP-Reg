@@ -166,6 +166,7 @@ class MuseFlow:
         invite_code: str = "",
         completion_retries: int = 4,
         completion_retry_delay: float = 20.0,
+        otp_resend_attempts: int = 3,
         ccv_card: Optional[dict] = None,
         ccv_mode: str = CCV_MODE_CARD,
         ccv_link_account_type: str = "facebook",
@@ -191,6 +192,7 @@ class MuseFlow:
         self.invite_code = (invite_code or "").strip()
         self.completion_retries = max(1, int(completion_retries or 1))
         self.completion_retry_delay = max(0.0, float(completion_retry_delay or 0.0))
+        self.otp_resend_attempts = max(1, int(otp_resend_attempts or 1))
         self.ccv_card = dict(ccv_card or {})
         self.ccv_mode = (ccv_mode or CCV_MODE_CARD).strip().lower()
         self.ccv_link_account_type = (ccv_link_account_type or "facebook").strip().lower()
@@ -356,35 +358,60 @@ class MuseFlow:
                 funnel.registration_start(client.s)
 
             # ── [3] 发送邮箱验证码 ──
+            #
+            # 同じメールボックスを別 attempt で再試行すると、前回の attempt が
+            # 既に使った古い検証メールが受信箱に残っている。Graph の受信時刻は
+            # 本機時計と数十秒ずれるため時間窓だけでは弾けず、古いコードを
+            # confirm-otp に渡して 400 invalidCode で死ぬ。invalidCode なら
+            # 送り直す（古いメールは消費済み登録で弾かれ、新着を待つ）。
             stage = "send_otp"
-            self._phase(stage, f"[4/10] 发送验证码邮件 -> {email}...")
-            sent_at = time.time()
-            client.send_otp(email)
+            confirm_data = None
+            for otp_try in range(1, self.otp_resend_attempts + 1):
+                if otp_try == 1:
+                    self._phase(stage, f"[4/10] 发送验证码邮件 -> {email}...")
+                else:
+                    self._phase(
+                        stage,
+                        f"[4/10] 検証コードが無効 → コードを再送します "
+                        f"(第 {otp_try}/{self.otp_resend_attempts} 回)...",
+                    )
+                sent_at = time.time()
+                client.send_otp(email)
 
-            # ── [4] 轮询等待 6 位 OTP ──
-            stage = "wait_otp"
-            self._phase(stage, f"[5/10] 等待邮箱 6 位验证码 (超时 {self.otp_timeout}s)...")
-            try:
-                otp_code = mail_provider.wait_for_otp(
-                    email, timeout=self.otp_timeout, issued_after=sent_at
-                )
-            except TimeoutError as exc:
-                raise MuseFlowError(
-                    f"OTP 等待超时 ({self.otp_timeout}s): {exc}",
-                    stage=stage,
-                    category="otp_timeout",
-                ) from exc
-            if not otp_code:
-                raise MuseFlowError("未获取到有效 6 位验证码", stage=stage, category="otp_timeout")
-            logger.info(f"       收到验证码: {otp_code}")
+                # ── [4] 轮询等待 6 位 OTP ──
+                stage = "wait_otp"
+                self._phase(stage, f"[5/10] 等待邮箱 6 位验证码 (超时 {self.otp_timeout}s)...")
+                try:
+                    otp_code = mail_provider.wait_for_otp(
+                        email, timeout=self.otp_timeout, issued_after=sent_at
+                    )
+                except TimeoutError as exc:
+                    raise MuseFlowError(
+                        f"OTP 等待超时 ({self.otp_timeout}s): {exc}",
+                        stage=stage,
+                        category="otp_timeout",
+                    ) from exc
+                if not otp_code:
+                    raise MuseFlowError("未获取到有效 6 位验证码", stage=stage, category="otp_timeout")
+                logger.info(f"       收到验证码: {otp_code}")
 
-            if funnel:
-                funnel.otp_typed(client.s)
+                if funnel:
+                    funnel.otp_typed(client.s)
 
-            # ── [5] 校验验证码（动态提取 tos.content_version）──
-            stage = "confirm_otp"
-            self._phase(stage, "[6/10] 校验验证码 POST /api/auth/native/confirm-otp...")
-            confirm_data = client.confirm_otp(otp_code)
+                # ── [5] 校验验证码（动态提取 tos.content_version）──
+                stage = "confirm_otp"
+                self._phase(stage, "[6/10] 校验验证码 POST /api/auth/native/confirm-otp...")
+                try:
+                    confirm_data = client.confirm_otp(otp_code)
+                    break
+                except MuseError as exc:
+                    if "invalidCode" not in str(exc) or otp_try >= self.otp_resend_attempts:
+                        raise
+                    logger.warning(
+                        "       ⚠️ 検証コードが無効（前の attempt が消費した古いメール）"
+                        " → 送り直して新着メールを待ちます"
+                    )
+
             logger.info(
                 f"       OTP 校验通过 (tos={client.tos_content_version or 'default'}, "
                 f"state={confirm_data.get('registration_state')})"
