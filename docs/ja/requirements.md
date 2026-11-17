@@ -35,6 +35,42 @@
 4. `registered_waitlist` が目立つようになったら初めてプロキシを足します。プロキシプールを空 → 非空にすると、`auto_loop.py:463-470` の `max_per_ip` 到達時に自動で IP を切り替えるロジックが有効になります。
 5. プロキシ形式は `http://user:pass@host:port`。3 箇所に重複実装された正規化関数のいずれかが通します（`musepy/client.py:111-129`、`http_client.py:127-147`、`musepy/runner.py:41-55`）。
 
+## ブラウザのプロキシ設定（Edge + FoxyProxy 等）は効きません
+
+Edge に FoxyProxy を入れて住宅プロキシを設定しても、**このツール自身の通信は一切プロキシされません**。ブラウザと本ツールは別プロセスで、コード側がブラウザ／OS のプロキシ設定を明示的に無効化しているためです。
+
+- `http_client.py:160-168`: `session.trust_env = False` に加え、プロキシ未指定時は `session.proxies = {"http": "", "https": ""}` を代入します。コメントどおり「显式设置空代理，覆盖系统环境变量 (trust_env=False 对 libcurl 不够)」で、`curl_cffi`（libcurl）が `HTTP_PROXY` 等の環境変数を拾うのを潰しています。
+- `musepy/client.py:189-192`: 同じく空プロキシを注入し、`trust_env = False` を立てます。
+- `start_webui.py:18-21`: `NO_PROXY` / `no_proxy` に `localhost,127.0.0.1,::1` のみを設定し、`HTTP_PROXY` は設定しません（WebUI 自身の疎通をプロキシ経由にしないため）。
+
+つまり FoxyProxy が変えるのは「Edge のタブの経路」だけで、Python の出口 IP は変わりません。プロキシを使うには **WebUI の「代理池」画面に貼り付けてください**。
+
+### 貼り付け先
+
+| 目的 | 場所 |
+| --- | --- |
+| 自動ループ（推奨） | WebUI の `/proxy`（代理池）画面に 1 行 1 個で貼り、「覆盖保存」。ブラウザの `localStorage` キー `muse_proxy_pool_v1` に保持され（`webui/frontend/src/stores/proxy.js:4`）、`/api/auto/start` の `proxy_pool` として送られます（`app.py:86`） |
+| 手動で 1 件だけ | 各画面の proxy 入力欄（`MuseFlow(proxy=...)` にそのまま渡ります） |
+
+代理池画面の「测试全部 / 测试」ボタン（`webui/frontend/src/views/ProxyPool.vue:103`・同 `:147`）は `POST /api/proxy/test`（`app.py:313-351`）を呼び、**出口 IP と遅延**を表示します。直結時と違う IP が出れば経路が切り替わったと確認できます。
+
+### 受け付ける形式
+
+`http_client.py:127-147` の `normalize_proxy` を実際に実行した結果です（同じ実装が `musepy/client.py:111-129`・`musepy/runner.py:41-55` にも重複しています）。
+
+| 入力 | 正規化後 |
+| --- | --- |
+| `jp.proxy.example:8000:user:pass` | `http://user:pass@jp.proxy.example:8000`（`muse-protocol` の `proxies.txt` と同じ 4 段形式） |
+| `http://user:pass@1.2.3.4:8080` | そのまま |
+| `1.2.3.4:8080` | `http://1.2.3.4:8080`（認証なし） |
+| `socks5://u:p@h:1080` | `socks5h://u:p@h:1080`（`h` 付き＝プロキシ側で DNS 解決） |
+| `socks5h://h:1080` | そのまま |
+| 空行・空白のみ | 直結（`None`）|
+
+1 行 1 個で貼ります。行頭 `#` はコメント、重複行は自動で除去されます（`auto_loop.py:34-42`）。
+
+**日本 (JP) ノードを推奨します。** 地区は `musepy/client.py:296-300` で `lang` が `ja` で始まるとき `region=JP` になるため、JP 出口なら waitlist を避けやすくなります。
+
 ## メール受信手段の比較
 
 `db.py` の `DEFAULT_MAIL_SOURCE` は `icloud_relay` ですが、**追加サービスが要らないのは `outlook`** です。

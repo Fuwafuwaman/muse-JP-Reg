@@ -44,7 +44,7 @@
    - `cf_temp`: 自前の Cloudflare Worker 一時メールを用意し、`cf_api_url` / `cf_admin_token` / `cf_domain` を登録。使い捨てで無制限。
    - `icloud_relay`: `email----relay_url` 形式で投入。外部の中継サービス、または `import_icloud.py` で `../icloud` から生成して取り込み。
 2. （任意）**招待コードを投入**: `/api/invites/import`、または UI の邀请码ページ。`https://muse.ai/?invite=XXXX` の URL 貼り付けも可（`db.py` の `_clean_code` が抽出）。1 枚あたり最大 30 回まで使えます。
-3. （任意）**プロキシを貼る**: 1 行 1 個。空なら直結。
+3. （任意）**プロキシを貼る**: 代理池画面（`/proxy`）に 1 行 1 個。空なら直結。**Edge の FoxyProxy 等は効かない**ので必ずここに貼ります（[docs/ja/requirements.md](docs/ja/requirements.md) の「ブラウザのプロキシ設定（Edge + FoxyProxy 等）は効きません」）。
 4. **動作確認**: 単発登録で 1 件通してから、バッチに進みます。
 
 ## 運用フロー
