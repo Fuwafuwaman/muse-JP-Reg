@@ -10,6 +10,12 @@ from unittest.mock import patch
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+try:  # cp932 コンソールでも日本語の print で落ちないように
+    sys.stdout.reconfigure(errors="replace")
+    sys.stderr.reconfigure(errors="replace")
+except Exception:
+    pass
+
 
 def test_mail_provider_otp_formats():
     from mail_providers.icloud_relay import parse_relay_html
@@ -201,11 +207,59 @@ def test_muse_flow_end_to_end_mock():
     print("[PASS] muse_flow_end_to_end_mock")
 
 
+def test_ccv_link_auto_rearm_margin():
+    """auto_rearm_tick の margin 上書き（寿命が近い分だけ／強制全件）。"""
+    import time
+    from types import SimpleNamespace
+
+    from webui import ccv_link as cl
+
+    mgr = cl.LinkManager()
+    mgr.auto_rearm = True
+    done = []
+    mgr.rearm = lambda email, **kw: (done.append(email), {"ok": True})[1]
+
+    now = time.time()
+
+    def sess(email, ttl, state="pending", external=False):
+        return SimpleNamespace(
+            id=email, email=email, state=state, external=external,
+            expires_at=(now + ttl) if ttl else None,
+            to_dict=lambda: {"done": False},
+        )
+
+    mgr._sessions = {
+        "a": sess("long@x", 600.0),            # まだ余裕あり
+        "b": sess("soon@x", 60.0),             # 既定閾値(150秒)未満
+        "c": sess("err@x", 600.0, state="error"),
+        "d": sess("ext@x", 10.0, external=True),  # フロー側が自走中なので触らない
+    }
+
+    # 既定の margin: 寿命が近いものと error だけが出し直し対象
+    assert sorted(mgr.auto_rearm_tick()) == ["err@x", "soon@x"], done
+
+    # 大きな margin: 直前の 2 件はクールダウンで外れ、余裕のある 1 件が対象になる
+    done.clear()
+    assert mgr.auto_rearm_tick(margin=10 ** 9) == ["long@x"], done
+
+    # クールダウンを無視すれば全件が対象（external は常に対象外）
+    done.clear()
+    mgr._last_rearm.clear()
+    assert sorted(mgr.auto_rearm_tick(margin=10 ** 9)) == \
+        ["err@x", "long@x", "soon@x"], done
+
+    # 自動出し直しが OFF なら何もしない
+    mgr.auto_rearm = False
+    assert mgr.auto_rearm_tick(margin=10 ** 9) == []
+    print("[PASS] ccv_link_auto_rearm_margin")
+
+
 def main():
     test_mail_provider_otp_formats()
     test_db_and_fastapi_routes()
     test_muse_flow_end_to_end_mock()
-    print("WebUI 全链路冒烟通过 3/3")
+    test_ccv_link_auto_rearm_margin()
+    print("WebUI 全链路冒烟通过 4/4")
 
 
 if __name__ == "__main__":

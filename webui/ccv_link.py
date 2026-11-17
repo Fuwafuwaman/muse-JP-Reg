@@ -404,6 +404,9 @@ class LinkManager:
     def auto_rearm_tick(self, margin: float = -1.0) -> list[str]:
         """寿命が切れた／失敗した試行に新しい承認 URL を出す。
 
+        ``margin`` は「残り寿命がこの秒数未満なら出し直す」閾値（既定
+        ``_AUTO_REARM_MARGIN``）。十分大きな値を渡すと今すぐ全件を出し直せる。
+
         人間が承認し終えたアカウントは、次の ``rearm`` の ``start`` が
         ``url: null`` を返す（または ``_ccv_cleared`` が拾う）ので自然に止まる。
         """
@@ -421,7 +424,7 @@ class LinkManager:
             if now - self._last_rearm.get(sess.email, 0.0) < _AUTO_REARM_COOLDOWN:
                 continue
             ttl = (float(sess.expires_at) - now) if sess.expires_at else 0.0
-            if sess.state == "error" or ttl < _AUTO_REARM_MARGIN:
+            if sess.state == "error" or ttl < margin:
                 self._last_rearm[sess.email] = now
                 due.append(sess.email)
 
