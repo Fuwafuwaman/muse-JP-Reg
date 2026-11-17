@@ -50,6 +50,12 @@
   <br><b>1 アカウントにつき 1 回</b>の承認が必要です。ブラウザの Meta セッションが残っていれば 2 件目以降は数クリックで済みます。
 </div>
 <div class="note warn">
+  <b>ブラウザが facebook.com に到達できないと承認は絶対に成功しません。</b>
+  FoxyProxy 等でプロキシを張っている場合、認証情報（ユーザー名/パスワード）が未設定だと
+  <code>ERR_PROXY_AUTH_UNSUPPORTED</code> になり、承認 URL は毎回エラーページになります。
+  FoxyProxy の対象プロキシに SOAX のユーザー名/パスワードを入れるか、いったん FoxyProxy を Off にして確認してください。
+</div>
+<div class="note warn">
   <b>承認 URL の寿命は実測で約 17 分です。</b> 切れたら「URL 出し直す」で新しい URL を出せます（Muse 側の承認試行は作り直されます）。
   <br>連携が「使用不可」と判定された場合 (<code>use_credit_card</code>) は、そのアカウントでは SNS 連携が使えないので、
   クレジットカードでの解除に切り替えてください。
@@ -162,6 +168,10 @@ async function setAuto(on) {
   refresh();
 }
 
+function sid(s) {
+  return String(s.email || s.id || "").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
 function renderSessions(list) {
   const box = $("sessions");
   lastSessions = list;
@@ -170,12 +180,13 @@ function renderSessions(list) {
   if (!list.length) { box.innerHTML = '<div class="empty">まだ何も開始していません。</div>'; return; }
   let html = "<table><tr><th style='width:190px'>メール</th><th style='width:120px'>状態</th><th>操作</th></tr>";
   for (const s of list) {
-    html += "<tr><td><code>" + esc(s.email) + "</code><div class='sub'>" + esc(s.account_type) + "</div></td>" +
-      "<td><span class='" + stateClass(s.state) + "'>" + esc(s.state) + "</span><div class='sub'>" + esc(s.hint || "") + "</div>" +
+    const rid = sid(s);
+    html += "<tr id='row-" + rid + "'><td><code>" + esc(s.email) + "</code><div class='sub'>" + esc(s.account_type) + "</div></td>" +
+      "<td><span id='st-" + rid + "' class='" + stateClass(s.state) + "'>" + esc(s.state) + "</span><div class='sub'>" + esc(s.hint || "") + "</div>" +
       "<div class='sub'>" + ttlText(s) + "</div>" +
       (s.error ? "<div class='sub'>" + esc(s.error) + "</div>" : "") + "</td><td>";
     if (s.url) {
-      html += "<a class='go' href='" + esc(s.url) + "' target='_blank' rel='noopener'>承認する</a> " +
+      html += "<a class='go' id='go-" + rid + "' href='" + esc(s.url) + "' target='_blank' rel='noopener'>承認する</a> " +
         "<button onclick=\"copyUrl('" + esc(s.url) + "')\">URL をコピー</button> ";
     } else if (!s.done) {
       html += "<span class='sub'>URL を取得中…</span> ";
