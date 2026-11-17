@@ -1,6 +1,7 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import NProgress from 'nprogress'
-import { t } from '@/i18n'
+import { t, lang } from '@/i18n'
+import { watch } from 'vue'
 
 NProgress.configure({ showSpinner: false, trickleSpeed: 120, minimum: 0.15 })
 
@@ -79,6 +80,11 @@ router.beforeEach((to, from, next) => {
 })
 router.afterEach(() => {
   NProgress.done()
+})
+
+watch(lang, () => {
+  const title = router.currentRoute.value?.meta?.title
+  if (title) document.title = `${t(title)} · Muse Register`
 })
 
 export default router
