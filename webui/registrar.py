@@ -245,7 +245,9 @@ def _do_register(
         else:
             log.error(f"[register] ❌ 失败 (stage={stage}, category={category}): {err}")
             if is_pooled:
-                if category == "pre_send_network" or (category == "server_rejected" and stage == "completion"):
+                if category == "pre_send_network" or (
+                    category == "server_rejected" and stage in ("completion", "confirm_otp")
+                ):
                     db.release_unused(email)
                     log.warning(
                         f"[register] {email} 未产生账号（{stage}/{category}），已释放回 available 供重试"

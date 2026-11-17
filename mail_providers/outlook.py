@@ -20,6 +20,7 @@ import imaplib
 import json
 import logging
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -30,6 +31,34 @@ from typing import Optional
 from .base import ConfigField, MailProvider, register, validate_email
 
 logger = logging.getLogger(__name__)
+
+# ─────────────────── 已消费 OTP 邮件登记（防串号） ───────────────────
+#
+# 同一邮箱被重试时（前一次 attempt 已把信取走、或被 kill 掉），旧信仍在
+# 收件箱里。Graph 的 receivedDateTime 与本机时钟有数分钟偏移，仅靠
+# issued_after 时间窗拦不住，会把「上一轮那次 attempt 的废码」当成本轮结果
+# 交给 confirm-otp 从而 400 invalidCode。这里按邮箱记住已经取过的邮件 id，
+# する。Graph の receivedDateTime と本機クロックには数分のずれがあり、
+# issued_after の時間窓だけでは弾けない。ここでメールボックス単位に既読 id を
+# 覚え、後続の attempt では必ずスキップして、今回の send_otp が起こした
+# 新しいメールを待たせる。
+_CONSUMED_OTP_MSGS: dict[str, dict[str, float]] = {}
+_CONSUMED_OTP_LOCK = threading.Lock()
+_CONSUMED_OTP_TTL = 3600.0
+
+
+def _msg_already_consumed(email_addr: str, key: str) -> bool:
+    now = time.time()
+    with _CONSUMED_OTP_LOCK:
+        bucket = _CONSUMED_OTP_MSGS.setdefault(email_addr.lower(), {})
+        for k, ts in [(k, v) for k, v in bucket.items() if now - v > _CONSUMED_OTP_TTL]:
+            bucket.pop(k, None)
+        return key in bucket
+
+
+def _mark_msg_consumed(email_addr: str, key: str) -> None:
+    with _CONSUMED_OTP_LOCK:
+        _CONSUMED_OTP_MSGS.setdefault(email_addr.lower(), {})[key] = time.time()
 
 # ──────────────────────── 常量 ────────────────────────
 
@@ -221,6 +250,10 @@ def fetch_otp_via_graph(
                     continue
                 seen.add(msg_id)
 
+                # 前の attempt で既に取り出したメールは「古いコード」なので飛ばす
+                if _msg_already_consumed(email_addr, msg_id):
+                    continue
+
                 received = msg.get("receivedDateTime", "")
                 try:
                     dt = datetime.fromisoformat(received.replace("Z", "+00:00"))
@@ -256,6 +289,7 @@ def fetch_otp_via_graph(
                     logger.info(
                         f"[outlook-graph] {email_addr} OTP={otp} folder={folder}"
                     )
+                    _mark_msg_consumed(email_addr, msg_id)
                     return otp
 
         token_refreshed = False
@@ -443,6 +477,11 @@ def fetch_otp_via_imap(
                         msg = _email.message_from_bytes(raw[0][1])
                     except Exception:
                         continue
+                    # 前の attempt で取ったメールは古いコードなので飛ばす
+                    mkey = (msg.get("Message-ID") or "").strip() or \
+                        f"{folder}:{mid.decode(errors='ignore')}"
+                    if _msg_already_consumed(email_addr, mkey):
+                        continue
                     date_str = msg.get("Date") or ""
                     try:
                         msg_ts = _eu.parsedate_to_datetime(date_str).timestamp()
@@ -474,6 +513,7 @@ def fetch_otp_via_imap(
                             f"[outlook-imap] {email_addr} OTP={otp} "
                             f"folder={folder!r}"
                         )
+                        _mark_msg_consumed(email_addr, mkey)
                         try:
                             M.logout()
                         except Exception:
