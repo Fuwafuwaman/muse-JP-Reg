@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>年齢確認(CCV) を SNS 連携で解除</title>
+<style>
+  :root { --fg:#1f2328; --dim:#656d76; --line:#d0d7de; --accent:#0969da; --ok:#1a7f37; --warn:#9a6700; --err:#cf222e; --bg:#f6f8fa; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:20px 24px 60px; font-family:-apple-system,"Segoe UI","Yu Gothic UI",Meiryo,sans-serif;
+         color:var(--fg); background:#fff; line-height:1.55; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  h2 { font-size:15px; margin:24px 0 8px; }
+  .sub { color:var(--dim); font-size:13px; margin-bottom:16px; }
+  .note { background:var(--bg); border:1px solid var(--line); border-left:4px solid var(--accent);
+          border-radius:6px; padding:10px 12px; font-size:13px; margin:12px 0; }
+  .note.warn { border-left-color:var(--warn); }
+  table { border-collapse:collapse; width:100%; font-size:13px; }
+  th, td { border-bottom:1px solid var(--line); padding:6px 8px; text-align:left; vertical-align:top; }
+  th { background:var(--bg); font-weight:600; }
+  code { font-family:Consolas,monospace; font-size:12px; word-break:break-all; }
+  button { font:inherit; font-size:13px; padding:5px 12px; border:1px solid var(--line);
+           border-radius:6px; background:#fff; cursor:pointer; }
+  button:hover { background:var(--bg); }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.primary:hover { filter:brightness(1.08); }
+  a.go { display:inline-block; background:var(--ok); color:#fff; text-decoration:none;
+         padding:6px 14px; border-radius:6px; font-weight:600; font-size:13px; }
+  .state { font-weight:600; }
+  .state.ok { color:var(--ok); }
+  .state.pending { color:var(--warn); }
+  .state.err { color:var(--err); }
+  .empty { color:var(--dim); font-size:13px; padding:8px 0; }
+  .toolbar { display:flex; gap:8px; align-items:center; margin:8px 0 4px; }
+  .urlbox { margin-top:6px; }
+  .urlbox code { display:block; background:var(--bg); border:1px solid var(--line);
+                 border-radius:6px; padding:6px 8px; margin-top:4px; }
+</style>
+</head>
+<body>
+<h1>年齢確認(CCV) を Instagram / Facebook 連携で解除</h1>
+<div class="sub">
+  muse の <code>ccv_required</code> はクレジットカードの他に、Meta の SNS アカウント連携でも解除できます。
+  デビットカードしか無い場合はこちらが有効です。このページは <a href="/">WebUI 本体</a> の補助画面です。
+</div>
+
+<div class="note">
+  <b>手順:</b> 対象の「連携を開始」→ 表示された <b>承認する</b> ボタンで Meta にログインして承認 →
+  このページが自動で完了を検知して解除します（数十秒かかる場合があります）。
+  <br><b>1 アカウントにつき 1 回</b>の承認が必要です。ブラウザの Meta セッションが残っていれば 2 件目以降は数クリックで済みます。
+</div>
+<div class="note warn">
+  <b>ブラウザが facebook.com に到達できないと承認は絶対に成功しません。</b>
+  FoxyProxy 等でプロキシを張っている場合、認証情報（ユーザー名/パスワード）が未設定または<b>間違っている</b>と
+  <code>ERR_PROXY_AUTH_UNSUPPORTED</code> になり、承認 URL は毎回エラーページになります。
+  FoxyProxy の対象プロキシに SOAX のユーザー名/パスワードを入れ直すか、いったん FoxyProxy を Off にして確認してください。
+  <br>到達できていれば、承認 URL は <code>facebook.com/login/?…&amp;next=&lt;承認 URL&gt;</code> に <b>302 で飛びます</b>（＝<code>etoken</code> は保持）。
+  これはエラーではありません。プロキシのエラーページが出ていなければ、あとは<b>その画面で Meta にログインするだけ</b>で承認に戻ります。
+</div>
+<div class="note warn">
+  <b>承認 URL の寿命は実測で約 17 分です。</b> 切れたら「URL 出し直す」で新しい URL を出せます（Muse 側の承認試行は作り直されます）。
+  <br>連携が「使用不可」と判定された場合 (<code>use_credit_card</code>) は、そのアカウントでは SNS 連携が使えないので、
+  クレジットカードでの解除に切り替えてください。
+</div>
+
+<h2>進行中 <span id="activeCount" class="sub"></span></h2>
+<div class="toolbar">
+  <button class="primary" onclick="openAllTabs()">未承認の URL を全部タブで開く</button>
+  <button onclick="rearmAll()">全部の URL を出し直す</button>
+  <button onclick="refresh()">今すぐ更新</button>
+  <button onclick="clearDone()">完了分を消す</button>
+  <label class="sub"><input type="checkbox" id="autoRearm" checked onchange="setAuto(this.checked)"> 切れた URL を自動で出し直す</label>
+  <span id="autoLabel" class="sub"></span>
+</div>
+<div class="note">
+  まとめて処理する場合は「全部タブで開く」→ 開いたタブで順に <b>「許可」/「続行」</b> を押していくだけです。
+  承認は数十秒でこのページに反映され、行の状態が <code>continue</code> に変わります。
+  URL が切れたら「全部の URL を出し直す」を押してから、また「全部タブで開く」で続けられます。
+  <br><b>自動出し直し</b>がオンの間は、席を外していても URL が生き返ります（古いタブで承認しても、
+  そのアカウントは <code>continue</code> として拾われます）。
+  <br>状態が <code>pending</code> のまま何分も動かないのは <b>正常</b>です。Muse の完了チェックは承認前
+  <code>429</code>（未解決の合図）を返し続けますが、この画面は失敗にせず待ち続けます。
+  ログに <code>まだ未解決（429）、待機中</code> と出続けていれば正常です。
+</div>
+<div id="sessions"></div>
+
+<h2>年齢確認が未解除のアカウント</h2>
+<div class="toolbar">
+  <button class="primary" onclick="startAll()">表示中のすべてを開始</button>
+  <span class="sub">連携が済んだアカウントは自動で一覧から外れます。</span>
+</div>
+<div id="targets"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let autoRefresh = true;
+let busiest = false;
+let lastSessions = [];
+
+function openable() {
+  const now = Date.now() / 1000;
+  return lastSessions.filter((s) => s.url && !s.done && !s.expired && (!s.expires_at || s.expires_at > now + 20));
+}
+
+function openAllTabs() {
+  const list = openable();
+  if (!list.length) { alert("開ける URL がありません（すべて承認済みか、URL 未取得です）"); return; }
+  let opened = 0;
+  for (const s of list) { if (window.open(s.url, "_blank")) opened++; }
+  if (opened !== list.length) {
+    alert(opened + " / " + list.length + " 件だけ開きました。このページのポップアップを許可してから再試行してください。");
+  }
+}
+
+async function rearmAll() {
+  if (busiest) return;
+  busiest = true;
+  try {
+    await api("/api/ccv/link/rearm_all?timeout=1000", { method: "POST" });
+  } catch (e) { alert("出し直しに失敗: " + e.message); }
+  finally { busiest = false; refresh(); }
+}
+
+function stateClass(s) {
+  if (s === "continue") return "state ok";
+  if (s === "pending" || s === "starting") return "state pending";
+  return "state err";
+}
+
+function ttlText(s) {
+  if (s.expired) return "URL の有効期限が切れました → 出し直してください";
+  if (!s.expires_at) return "";
+  const left = Math.round(s.expires_at - Date.now() / 1000);
+  if (left <= 0) return "URL の有効期限が切れました → 出し直してください";
+  const m = Math.floor(left / 60), sec = left % 60;
+  return "この URL の残り 約 " + m + " 分 " + String(sec).padStart(2, "0") + " 秒";
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || j.error || ("HTTP " + r.status));
+  return j;
+}
+
+async function refresh() {
+  try {
+    const [s, t, a] = await Promise.all([
+      api("/api/ccv/link/sessions"),
+      api("/api/ccv/link/targets"),
+      api("/api/ccv/link/auto"),
+    ]);
+    $("autoRearm").checked = !!a.enabled;
+    $("autoLabel").textContent = a.enabled ? "自動出し直し: オン" : "自動出し直し: オフ";
+    renderSessions(s.sessions || []);
+    renderTargets(t.targets || []);
+  } catch (e) {
+    $("sessions").innerHTML = '<div class="empty">取得に失敗: ' + esc(e.message) + "</div>";
+  }
+}
+
+async function setAuto(on) {
+  try {
+    await api("/api/ccv/link/auto", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: !!on }),
+    });
+  } catch (e) { alert("切り替えに失敗: " + e.message); }
+  refresh();
+}
+
+function sid(s) {
+  return String(s.email || s.id || "").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function renderSessions(list) {
+  const box = $("sessions");
+  lastSessions = list;
+  const active = list.filter((s) => !s.done);
+  $("activeCount").textContent = active.length ? "(" + active.length + " 件)" : "";
+  if (!list.length) { box.innerHTML = '<div class="empty">まだ何も開始していません。</div>'; return; }
+  let html = "<table><tr><th style='width:190px'>メール</th><th style='width:120px'>状態</th><th>操作</th></tr>";
+  for (const s of list) {
+    const rid = sid(s);
+    html += "<tr id='row-" + rid + "'><td><code>" + esc(s.email) + "</code><div class='sub'>" + esc(s.account_type) + "</div></td>" +
+      "<td><span id='st-" + rid + "' class='" + stateClass(s.state) + "'>" + esc(s.state) + "</span><div class='sub'>" + esc(s.hint || "") + "</div>" +
+      "<div class='sub'>" + ttlText(s) + "</div>" +
+      (s.error ? "<div class='sub'>" + esc(s.error) + "</div>" : "") + "</td><td>";
+    if (s.url) {
+      html += "<a class='go' id='go-" + rid + "' href='" + esc(s.url) + "' target='_blank' rel='noopener'>承認する</a> " +
+        "<button onclick=\"copyUrl('" + esc(s.url) + "')\">URL をコピー</button> ";
+    } else if (!s.done) {
+      html += "<span class='sub'>URL を取得中…</span> ";
+    }
+    if (!s.done) html += "<button onclick=\"cancel('" + esc(s.id) + "')\">中止</button>";
+    if (!s.done || s.expired) {
+      html += " <button onclick=\"rearm('" + esc(s.email) + "')\">URL 出し直す</button>";
+    }
+    html += "</td></tr>";
+    if (s.url) html += "<tr><td colspan='3' class='urlbox'><code>" + esc(s.url) + "</code></td></tr>";
+  }
+  box.innerHTML = html + "</table>";
+}
+
+function renderTargets(list) {
+  const box = $("targets");
+  if (!list.length) { box.innerHTML = '<div class="empty">対象なし（すべて解除済み）。</div>'; return; }
+  let html = "<table><tr><th>メール</th><th style='width:110px'>CCV</th><th style='width:170px'>登録状態</th><th style='width:210px'>操作</th></tr>";
+  for (const t of list) {
+    html += "<tr><td><code>" + esc(t.email) + "</code></td><td>" + esc(t.ccv_status) + "</td>" +
+      "<td>" + esc(t.status) + "</td>" +
+      "<td><button class='primary' onclick=\"start('" + esc(t.email) + "')\">連携を開始</button> " +
+      "<button onclick=\"rearm('" + esc(t.email) + "')\">出し直す</button></td></tr>";
+  }
+  box.innerHTML = html + "</table>";
+}
+
+function esc(v) {
+  return String(v == null ? "" : v).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+async function start(email) {
+  if (busiest) return;
+  busiest = true;
+  try {
+    await api("/api/ccv/link/start", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: email }),
+    });
+  } catch (e) { alert("開始に失敗: " + e.message); }
+  finally { busiest = false; refresh(); }
+}
+
+async function startAll() {
+  const emails = Array.from(document.querySelectorAll("#targets button"))
+    .filter((b) => (b.getAttribute("onclick") || "").startsWith("start("))
+    .map((b) => b.getAttribute("onclick").match(/'([^']+)'/)[1]);
+  for (const e of emails) { await start(e); }
+}
+
+async function rearm(email) {
+  if (busiest) return;
+  busiest = true;
+  try {
+    await api("/api/ccv/link/rearm", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: email }),
+    });
+  } catch (e) { alert("出し直しに失敗: " + e.message); }
+  finally { busiest = false; refresh(); }
+}
+
+async function cancel(id) {
+  await api("/api/ccv/link/cancel/" + encodeURIComponent(id), { method: "POST" });
+  refresh();
+}
+
+async function clearDone() {
+  await api("/api/ccv/link/clear_done", { method: "POST" });
+  refresh();
+}
+
+async function copyUrl(u) {
+  try { await navigator.clipboard.writeText(u); }
+  catch (e) { window.prompt("URL", u); }
+}
+
+document.addEventListener("visibilitychange", () => { autoRefresh = !document.hidden; });
+setInterval(() => { if (autoRefresh) refresh(); }, 2500);
+refresh();
+</script>
+</body>
+</html>
