@@ -441,6 +441,16 @@ class AutoLoopController:
                 err = run_row.get("error") or ""
                 real_email = run_row.get("email") or current_account["email"]
 
+                # link モードでは「登録は完了したが CCV 未解除 / accept_tos 不能」で
+                # run が failed(protocol_error 等) になるのが正常系。category だけでは
+                # 判定できないので、registered テーブルに実在するかで保留を判定する。
+                pending_like = False
+                if st != "done" and cat not in ("pre_send_network", "region_waitlist", "account"):
+                    try:
+                        pending_like = bool(db.get_registered(real_email))
+                    except Exception:
+                        pending_like = False
+
                 if st == "done":
                     with self._lock:
                         self._registered_ok += 1
@@ -500,7 +510,7 @@ class AutoLoopController:
                     self._broadcast("state", self._snapshot())
                     continue
 
-                elif cat == "pending_redemption":
+                elif cat == "pending_redemption" or pending_like:
                     # 账号已注册保留，只是年齢確認 (CCV) 未解除 / 邀请码未兑换。
                     # 邮箱已 mark_done，不能当失败处理，否则 target_count 永远到不了。
                     with self._lock:
@@ -513,17 +523,25 @@ class AutoLoopController:
                     uses += 1
                     current_account = None
                     retries = 0
-                    logger.info(f"[auto] {real_email} 已注册但未激活 ({stage})，保留等待人工解除")
+                    logger.info(f"[auto] {real_email} 已注册但未激活 ({stage}/{cat})，保留等待人工解除")
                     self._broadcast("run_finished", {
                         "worker_id": worker_id,
                         "email": real_email,
                         "run_id": run_id,
                         "ok": False,
-                        "category": cat,
+                        "category": "pending_redemption",
                     })
                     if self._check_target_reached():
                         self._broadcast("state", self._snapshot())
                         return
+
+                    if self._proxy_pool and uses >= self._max_per_ip and not self._stop_event.is_set():
+                        self._release_proxy(proxy_line)
+                        with self._lock:
+                            self._ip_switches += 1
+                        avoid_proxy = proxy_line
+                        proxy_line = None
+                        uses = 0
 
                 elif cat == "region_waitlist":
                     with self._lock:
