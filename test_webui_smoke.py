@@ -160,7 +160,7 @@ def test_muse_flow_end_to_end_mock():
             assert code == "612890"
             self.tos_content_version = "ntm_dynamic_v4"
             return {"registration_state": "completion_required", "tos": {"content_version": "ntm_dynamic_v4"}}
-        def register_completion(self, dob, first, last, remember_device=True):
+        def register_completion(self, dob, first, last, **kw):
             return {"auth_meta_session": {"frl_access_token": "frl_at_mock", "frl_account_id": "uid_mock_88"}}
         def session_cookie(self, name="hatch_sess"):
             return "hatch_sess_mock_value"

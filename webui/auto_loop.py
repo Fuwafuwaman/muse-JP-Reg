@@ -508,6 +508,23 @@ class AutoLoopController:
                             f"触发地区受限 waitlist（账号 {real_email} 已入库保留）！请切换日本 (JP) 节点后点「恢复」"
                         )
 
+                elif cat == "server_rejected" and stage == "completion" and retries < 2:
+                    # 服务端注册闸门临时拒绝（registrationBlocked）：邮箱已释放，重建整个会话重试
+                    retries += 1
+                    current_account = None
+                    with self._lock:
+                        self._last_message = (
+                            f"worker-{worker_id}: 服务端暂缓注册，重建会话重试 "
+                            f"({retries}/2) -> {real_email}"
+                        )
+                    if pooled:
+                        reclaimed = db.claim_account(real_email)
+                        if reclaimed:
+                            reclaimed["pooled_claimed"] = True
+                            current_account = reclaimed
+                    self._broadcast("state", self._snapshot())
+                    continue
+
                 else:
                     # 若是 pre_send_network 但已耗尽重试，标记该号或暂停防死循环
                     if cat == "pre_send_network" and pooled and current_account:

@@ -135,6 +135,9 @@ def _do_register(
             resolve_ip=bool(options.get("resolve_ip", True)),
             redeem_mode=options.get("redeem_mode") or "pool",
             invite_code=options.get("invite_code") or "",
+            completion_retries=int(options.get("completion_retries") or 4),
+            completion_retry_delay=float(options.get("completion_retry_delay") or 20.0),
+            ccv_card=db.get_ccv_card(),
             on_phase=_on_phase,
             on_early_save=_on_early_save,
             claim_pool_code=db.claim_invite_code,
@@ -197,9 +200,11 @@ def _do_register(
         else:
             log.error(f"[register] ❌ 失败 (stage={stage}, category={category}): {err}")
             if is_pooled:
-                if category == "pre_send_network":
+                if category == "pre_send_network" or (category == "server_rejected" and stage == "completion"):
                     db.release_unused(email)
-                    log.warning(f"[register] {email} 为发码前网络异常，已释放回 available")
+                    log.warning(
+                        f"[register] {email} 未产生账号（{stage}/{category}），已释放回 available 供重试"
+                    )
                 else:
                     db.mark_failed(email, f"[{stage}/{category}] {err}")
 

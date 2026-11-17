@@ -79,6 +79,8 @@ class RegisterReq(BaseModel):
     redeem_mode: str = "pool"         # "pool" | "single" | "none"
     invite_code: str = ""
     auto_pool_own_code: bool = True
+    completion_retries: int = Field(4, description="注册资料提交被服务端暂缓(registrationBlocked)时的重试次数")
+    completion_retry_delay: float = Field(20.0, description="注册资料重试间隔（秒）")
 
 
 class AutoLoopStartReq(BaseModel):
@@ -97,6 +99,8 @@ class AutoLoopStartReq(BaseModel):
     redeem_mode: str = "pool"         # "pool" | "none"
     auto_pool_own_code: bool = True
     stop_on_reject: bool = True
+    completion_retries: int = Field(4, description="注册资料提交被服务端暂缓(registrationBlocked)时的重试次数")
+    completion_retry_delay: float = Field(20.0, description="注册资料重试间隔（秒）")
 
 
 class InviteImportReq(BaseModel):
@@ -657,11 +661,30 @@ def api_bulk_delete_registered(req: BulkDeleteRegisteredReq):
 
 @app.get("/api/mail/providers")
 def api_mail_providers(pooled_only: bool = False):
+    providers = list_pooled_providers() if pooled_only else list_providers()
+    # 年齢確認(CCV)カードはどのメール事業者でも共通なので、選択中プロバイダの
+    # 設定欄に相乗りさせて 1 フォームで保存できるようにする。
+    providers = [
+        {**p, "config_fields": list(p.get("config_fields") or []) + list(db.CCV_FIELDS)}
+        for p in providers
+    ]
     return {
         "ok": True,
-        "providers": list_pooled_providers() if pooled_only else list_providers(),
+        "providers": providers,
         "current": db.get_setting("mail_source", db.DEFAULT_MAIL_SOURCE),
+        "ccv_fields": db.CCV_FIELDS,
     }
+
+
+@app.get("/api/settings/ccv")
+def api_get_ccv_config():
+    return {"ok": True, "config": db.get_ccv_config(), "fields": db.CCV_FIELDS}
+
+
+@app.post("/api/settings/ccv")
+def api_save_ccv_config(req: SaveMailConfigReq):
+    db.save_ccv_config(req.model_dump(exclude_none=True))
+    return {"ok": True, "config": db.get_ccv_config()}
 
 
 @app.get("/api/settings/mail")

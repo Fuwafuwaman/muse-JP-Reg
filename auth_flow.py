@@ -98,6 +98,8 @@ class MuseRegisterResult:
     date_of_birth: str = ""
     resolved_destination: str = ""
     disclosure_version: str = ""
+    ccv_status: str = ""              # not_required | failed | "" (年齢確認 CCV の状態)
+    ccv_error: str = ""
     ip: str = ""
     last_error: str = ""
     extra: dict = field(default_factory=dict)
@@ -129,6 +131,8 @@ class MuseRegisterResult:
             "date_of_birth": self.date_of_birth,
             "resolved_destination": self.resolved_destination,
             "disclosure_version": self.disclosure_version,
+            "ccv_status": self.ccv_status,
+            "ccv_error": self.ccv_error,
             "last_error": self.last_error,
         }
 
@@ -151,6 +155,9 @@ class MuseFlow:
         resolve_ip: bool = True,
         redeem_mode: str = "pool",   # "none" | "single" | "pool"
         invite_code: str = "",
+        completion_retries: int = 4,
+        completion_retry_delay: float = 20.0,
+        ccv_card: Optional[dict] = None,
         on_phase: Optional[Callable[[str, dict], None]] = None,
         on_early_save: Optional[Callable[[MuseRegisterResult], None]] = None,
         claim_pool_code: Optional[Callable[[], Optional[str]]] = None,
@@ -169,6 +176,9 @@ class MuseFlow:
         self.resolve_ip = bool(resolve_ip)
         self.redeem_mode = (redeem_mode or "none").strip().lower()
         self.invite_code = (invite_code or "").strip()
+        self.completion_retries = max(1, int(completion_retries or 1))
+        self.completion_retry_delay = max(0.0, float(completion_retry_delay or 0.0))
+        self.ccv_card = dict(ccv_card or {})
 
         self.on_phase = on_phase
         self.on_early_save = on_early_save
@@ -191,6 +201,93 @@ class MuseFlow:
                 self.on_phase(stage, {"email": self.result.email, "message": msg})
             except Exception:
                 pass
+
+    def _on_completion_retry(self, attempt: int, status: int, text: str) -> None:
+        reason = next(
+            (t for t in ("registrationBlocked", "registrationDisabled") if t in text),
+            f"http{status}",
+        )
+        msg = (
+            f"       ⏳ Muse 暂缓本次注册 ({reason})，{self.completion_retry_delay:.0f}s 后重试 "
+            f"(第 {attempt}/{self.completion_retries} 次)"
+        )
+        self._phase("completion", msg)
+        client = getattr(self, "_client", None)
+        if not (client is not None and self.resolve_ip and self.proxy):
+            return
+        try:
+            ip_now = client.s.get("https://api.ipify.org", timeout=10).text.strip()
+            if ip_now and self.result.ip and ip_now != self.result.ip:
+                logger.warning(f"       ⚠️ 出口 IP 发生漂移: {self.result.ip} -> {ip_now}")
+        except Exception:
+            pass
+
+    def _activate_ccv(self, client: MuseClient) -> None:
+        """年齢確認 (ccv_required) をカード登録で解除する。
+
+        Muse は登録直後のアカウントに年齢確認を要求し、未解除のままだと
+        ``/api/hatch/invite`` と ``/api/hatch/invite-code/redeem`` が 403 になる。
+        つまり解除できないと自分の招待コードを発行できず（＝増殖できない）、
+        貯めた招待コードで他アカウントを承認することもできない。
+        """
+        from musepy import ccv as ccv_mod
+
+        status = ""
+        try:
+            status = client.ccv_status() or ""
+        except Exception as exc:
+            logger.warning(f"       ccv-status 取得失敗: {exc}")
+
+        if status in ("", "not_required"):
+            if status == "not_required":
+                self.result.ccv_status = "not_required"
+            return
+
+        if not self.ccv_card or not self.ccv_card.get("card_number"):
+            self.result.ccv_status = status
+            logger.warning(
+                "       ⚠️ 年齢確認が必要 (ccv_status=%s) ですがカードが未設定です。"
+                "WebUI の「設定」→ CCV カード番号 を入力してください",
+                status,
+            )
+            return
+
+        self._phase("ccv", f"       💳 年齢確認が必要 (ccv_status={status})。カードを登録します...")
+        try:
+            res = ccv_mod.activate(
+                client,
+                card_number=str(self.ccv_card.get("card_number") or "").replace(" ", "").replace("-", ""),
+                expiry=str(self.ccv_card.get("expiry") or ""),
+                cvv=str(self.ccv_card.get("cvv") or ""),
+                zip_code=str(self.ccv_card.get("zip") or "1000001"),
+                country_code=str(self.ccv_card.get("country") or "") or None,
+                log=lambda msg, *a: logger.info("       " + (msg % a if a else msg)),
+            )
+        except Exception as exc:
+            self.result.ccv_status = "failed"
+            self.result.ccv_error = str(exc)
+            logger.warning(f"       ❌ 年齢確認(CCV)の解除に失敗: {exc}")
+            return
+
+        self.result.ccv_status = "not_required"
+        logger.info(f"       ✅ 年齢確認(CCV)を解除しました credential={res.get('credential_id')}")
+        try:
+            client.refresh_onboarding()
+        except Exception:
+            pass
+
+    def _gate_ccv(self, client: MuseClient, onboarding: dict) -> dict:
+        """onboarding の年齢確認ゲートを検出し、必要なら解除して最新 onboarding を返す。"""
+        ccv_flag = str(onboarding.get("ccv_status") or "")
+        if onboarding.get("verification_required") or ccv_flag not in ("", "not_required"):
+            logger.info(f"       ℹ️ 年齢確認ゲートを検出 (state={onboarding.get('state')}, ccv={ccv_flag})")
+            self._activate_ccv(client)
+            if self.result.ccv_status == "not_required":
+                try:
+                    onboarding = client.refresh_onboarding()
+                except Exception:
+                    pass
+        return onboarding
 
     def run_register(self, mail_provider) -> MuseRegisterResult:
         stage = "initialized"
@@ -222,6 +319,7 @@ class MuseFlow:
                 logger.info(f"       出口 IP = {ip or '直连/未知'}")
 
             client = MuseClient(proxy=self.proxy, impersonate=self.impersonate, lang=self.lang)
+            self._client = client
 
             # ── [1] 打开首页拿初始 Cookie（pre-send 阶段）──
             stage = "bootstrap"
@@ -304,7 +402,10 @@ class MuseFlow:
             )
             try:
                 comp_data = client.register_completion(
-                    self.date_of_birth, self.first_name, self.last_name
+                    self.date_of_birth, self.first_name, self.last_name,
+                    retries=self.completion_retries,
+                    retry_delay=self.completion_retry_delay,
+                    on_retry=self._on_completion_retry,
                 )
             except MuseError as comp_exc:
                 if "403" in str(comp_exc) and self.resolve_ip:
@@ -369,7 +470,9 @@ class MuseFlow:
             )
 
             # ── [8] 激活会话（单次调用 accept-tos，正文取服务端动态披露）──
+            # 年齢確認 (ccv_required) のアカウントは accept-tos が 403 になるので先に解除する
             stage = "accept_tos"
+            onboarding = self._gate_ccv(client, onboarding)
             self._phase(stage, "[9/10] 激活会话 POST /api/hatch/accept-tos...")
             client.accept_tos(onboarding)
             self.result.session_token = client.session_cookie("hatch_sess") or self.result.session_token
@@ -589,6 +692,41 @@ def check_account_live(
         client.close()
 
 
+def _ensure_ccv(client: MuseClient, ccv_card: Optional[dict]) -> str:
+    """CCV 未解除ならカード登録で解除する。戻り値は解除後の ccv_status。"""
+    try:
+        status = client.ccv_status() or ""
+    except Exception as exc:
+        logger.warning(f"       ccv-status 取得失敗: {exc}")
+        return ""
+    if status in ("", "not_required"):
+        return status
+    if not ccv_card or not ccv_card.get("card_number"):
+        logger.warning(f"       ⚠️ 年齢確認が必要 (ccv_status={status}) ですがカードが未設定です")
+        return status
+    from musepy import ccv as ccv_mod
+
+    logger.info(f"       💳 年齢確認 (ccv_status={status}) をカード登録で解除します...")
+    try:
+        res = ccv_mod.activate(
+            client,
+            card_number=str(ccv_card.get("card_number") or "").replace(" ", "").replace("-", ""),
+            expiry=str(ccv_card.get("expiry") or ""),
+            cvv=str(ccv_card.get("cvv") or ""),
+            zip_code=str(ccv_card.get("zip") or "1000001"),
+            country_code=str(ccv_card.get("country") or "") or None,
+            log=lambda msg, *a: logger.info("       " + (msg % a if a else msg)),
+        )
+        logger.info(f"       ✅ 年齢確認(CCV)を解除しました credential={res.get('credential_id')}")
+    except Exception as exc:
+        logger.warning(f"       ❌ 年齢確認(CCV)の解除に失敗: {exc}")
+        return "failed"
+    try:
+        return client.ccv_status() or ""
+    except Exception:
+        return ""
+
+
 def redeem_registered_account(
     cred: dict,
     invite_code: str,
@@ -596,6 +734,7 @@ def redeem_registered_account(
     proxy: Optional[str] = None,
     impersonate: str = "chrome142",
     lang: str = "ja",
+    ccv_card: Optional[dict] = None,
 ) -> dict:
     """对已注册（含未激活或已激活）的账号补跑会话引导 + accept_tos + wake_vm + redeem + scratch_code。"""
     sess_val = (cred.get("session_token") or "").strip()
@@ -613,7 +752,17 @@ def redeem_registered_account(
         cur_status = (cred.get("status") or "").strip()
         if access_token and (cur_status in ("registered_unactivated", "registered_waitlist", "") or not sess_val):
             onboarding = client.activate_session(access_token)
+            # 年齢確認ゲートが残っていると accept-tos / redeem が 403 になるので解除する
+            if onboarding.get("verification_required") or str(onboarding.get("ccv_status") or "") not in ("", "not_required"):
+                _ensure_ccv(client, ccv_card)
+                try:
+                    onboarding = client.refresh_onboarding()
+                except Exception:
+                    pass
             client.accept_tos(onboarding)
+        else:
+            # アクティベーション済みでも CCV が未解除なら 403 のままなので解除しておく
+            _ensure_ccv(client, ccv_card)
         # 协议要求：兑换前必须调 wake_vm，否则有效码也会误报 invalid
         vm_id = client.wake_vm()
         client.stateful_sharing()

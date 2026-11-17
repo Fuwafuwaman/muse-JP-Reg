@@ -47,7 +47,7 @@ class FakeClient:
         return {"registration_state": "completion_required",
                 "tos": {"content_version": "v_test"}}
 
-    def register_completion(self, dob, first, last):
+    def register_completion(self, dob, first, last, **kw):
         self._fail("completion")
         return {"auth_meta_session": {"frl_access_token": "tok-secret",
                                       "frl_account_id": "uid-1"}}

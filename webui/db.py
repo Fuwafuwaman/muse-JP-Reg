@@ -1034,6 +1034,88 @@ def set_setting(key: str, value) -> None:
         con.commit()
 
 
+# ════════════════════════ 年齢確認(CCV)カード ════════════════════════
+# /access/verification の年齢確認 (ccv_status=ccv_required) を通すためのカード 1 枚。
+# Meta Pay(ECP) のチェックアウトは paymentContainerMode=LIVE なので、
+# 確認用の $1 オーソリが通る「実在する」カード番号が必要（請求はされない）。
+
+CCV_FIELDS = [
+    {
+        "key": "ccv_card_number",
+        "label": "CCV: カード番号",
+        "type": "text",
+        "placeholder": "4242424242424242",
+        "required": False,
+        "help": "年齢確認用。Meta Pay の LIVE 決済なので 4242 などのテスト用 PAN は通らないことが多い（実際に使える JP のデビット/クレジットカードを推奨）。未入力なら CCV 未解除のまま＝招待コードの発行/利用が 403 になる",
+    },
+    {
+        "key": "ccv_card_expiry",
+        "label": "CCV: 有効期限 (MM/YY)",
+        "type": "text",
+        "placeholder": "12/30",
+        "required": False,
+        "help": "",
+    },
+    {
+        "key": "ccv_card_cvv",
+        "label": "CCV: セキュリティコード",
+        "type": "password",
+        "placeholder": "123",
+        "required": False,
+        "help": "",
+    },
+    {
+        "key": "ccv_card_zip",
+        "label": "CCV: 郵便番号",
+        "type": "text",
+        "placeholder": "1000001",
+        "required": False,
+        "help": "既定 1000001",
+    },
+    {
+        "key": "ccv_card_country",
+        "label": "CCV: 国コード",
+        "type": "text",
+        "placeholder": "JP",
+        "required": False,
+        "help": "既定 JP",
+    },
+]
+
+
+def get_ccv_config() -> dict:
+    out = {}
+    for f in CCV_FIELDS:
+        value = get_setting(f["key"], "")
+        out[f["key"]] = "***" if f.get("type") == "password" and value else value
+    return out
+
+
+def save_ccv_config(data: dict) -> None:
+    for f in CCV_FIELDS:
+        key = f["key"]
+        if key not in data:
+            continue
+        value = str(data[key] or "").strip()
+        if f.get("type") == "password" and (not value or value == "***"):
+            continue
+        set_setting(key, value)
+
+
+def get_ccv_card() -> dict:
+    """年齢確認に使うカード情報。未設定なら空 dict。"""
+    number = "".join(ch for ch in get_setting("ccv_card_number", "") if ch.isdigit())
+    if not number:
+        return {}
+    return {
+        "card_number": number,
+        "expiry": get_setting("ccv_card_expiry", "").strip(),
+        "cvv": get_setting("ccv_card_cvv", "").strip(),
+        "zip": get_setting("ccv_card_zip", "").strip() or "1000001",
+        "country": get_setting("ccv_card_country", "").strip() or "JP",
+    }
+
+
 def get_mail_config() -> dict:
     from mail_providers import list_providers
 
@@ -1045,6 +1127,7 @@ def get_mail_config() -> dict:
                 out[key] = "***" if get_setting(key) else ""
             else:
                 out[key] = get_setting(key, "")
+    out.update(get_ccv_config())
     return out
 
 
@@ -1066,6 +1149,8 @@ def save_mail_config(data: dict) -> None:
                 if not val or val == "***":
                     continue
             set_setting(key, str(val).strip())
+
+    save_ccv_config(data)
 
 
 def get_mail_settings() -> dict:

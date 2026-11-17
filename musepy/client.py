@@ -336,24 +336,64 @@ class MuseClient:
             self.tos_content_version = tos["content_version"]
         return data
 
-    def register_completion(self, date_of_birth, first_name, last_name, remember_device=True):
+    # 服务端「暂时性拒绝」类型：官方前端收到后会留在当前页让用户重试（iT(e,"stay")）
+    COMPLETION_SOFT_BLOCK_TYPES = ("registrationBlocked", "registrationDisabled")
+
+    def _completion_soft_block(self, status: int, text: str) -> bool:
+        if status >= 500:
+            return True
+        if status in (403, 409):
+            return any(t in text for t in self.COMPLETION_SOFT_BLOCK_TYPES)
+        return False
+
+    def register_completion(
+        self,
+        date_of_birth,
+        first_name,
+        last_name,
+        remember_device=True,
+        retries=4,
+        retry_delay=10.0,
+        on_retry=None,
+    ):
+        """提交注册资料；服务端 soft block（registrationBlocked）时原会话重试。
+
+        与官方前端一致：registrationBlocked 不清空会话，用户点「继续」即重发同一
+        register-completion（waterfall_id / completion handle 均不变）。
+        """
         body = {"date_of_birth": date_of_birth}
         if self.requires_name:
             body["first_name"] = first_name
             body["last_name"] = last_name
         body["tos_content_version"] = self.tos_content_version or TOS_VERSION
         body["remember_device"] = remember_device
-        r = self.s.post(
-            BASE + "/api/auth/native/register-completion",
-            impersonate=self.fp,
-            headers=self._auth_headers(),
-            data=json.dumps(body, ensure_ascii=False, separators=(",", ":")),
-        )
-        if r.status_code != 200:
-            raise MuseError(f"register-completion {r.status_code}: {r.text[:200]}")
-        data = self._json(r)
-        self.account_id = (data.get("auth_meta_session") or {}).get("frl_account_id")
-        return data
+        payload = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+
+        attempts = max(1, int(retries or 1))
+        for attempt in range(1, attempts + 1):
+            r = self.s.post(
+                BASE + "/api/auth/native/register-completion",
+                impersonate=self.fp,
+                headers=self._auth_headers(),
+                data=payload,
+            )
+            if r.status_code == 200:
+                data = self._json(r)
+                self.account_id = (data.get("auth_meta_session") or {}).get("frl_account_id")
+                return data
+
+            text = r.text[:200]
+            err = MuseError(f"register-completion {r.status_code}: {text}")
+            if attempt >= attempts or not self._completion_soft_block(r.status_code, text):
+                raise err
+
+            if on_retry:
+                try:
+                    on_retry(attempt, r.status_code, text)
+                except Exception:
+                    pass
+            time.sleep(max(0.0, float(retry_delay or 0)) + random.uniform(0, 2.0))
+        raise MuseError("register-completion 重试耗尽")
 
     def session_cookie(self, name="hatch_sess"):
         for c in self.s.cookies.jar:
@@ -417,15 +457,71 @@ class MuseClient:
             raise MuseError(f"activate_session 引导失败 {r.status_code}: {r.text[:120]}")
         final = urlsplit(url)
         if final.hostname != "muse.ai":
-            raise MuseError(f"activate_session 最终落在非 muse.ai 域（{final.hostname}）")
+            # 二次引导时 oidc 已绑定，302 会停在 auth.meta.com；改由 muse.ai 首页（会自动落到
+            # /access/verification 或应用页）解析真实状态，避免误判成域错误。
+            follow = self.s.get(
+                BASE + "/",
+                impersonate=self.fp,
+                headers=self._h(HEADERS_HTML, {
+                    "sec-fetch-site": "same-site",
+                    "referer": urlunsplit(("https", final.hostname, "/", "", "")),
+                }),
+            )
+            fallback = parse_onboarding(follow.text) if follow.status_code == 200 else None
+            if not fallback or fallback["state"] == "unresolved":
+                raise MuseError(
+                    f"activate_session 最终落在非 muse.ai 域（{final.hostname}）"
+                    f"/{follow.status_code} {fallback and fallback.get('reason')}"
+                )
+            final, r = urlsplit(BASE + "/"), follow
         onboarding = parse_onboarding(r.text)
         if onboarding["state"] == "waitlist":
             raise MuseError("region_waitlist")
+        if onboarding["state"] == "verification_required":
+            status = self.ccv_status()
+            if status:
+                onboarding["ccv_status"] = status
+            onboarding["source_url"] = urlunsplit(("https", final.hostname, final.path or "/", "", ""))
+            self.onboarding = onboarding
+            return onboarding
         if onboarding["state"] != "disclosure":
             raise MuseError(f"disclosure_context_unresolved ({onboarding.get('reason')})")
         onboarding["source_url"] = urlunsplit(("https", final.hostname, final.path or "/", "", ""))
         self.onboarding = onboarding
         return onboarding
+
+    def refresh_onboarding(self):
+        """最新のオンボーディング状態を取り直す（CCV 解除後の最終確認に使う）。
+
+        /access/verification から / へ遷移したあとの HTML を解析する。
+        """
+        r = self.s.get(
+            BASE + "/",
+            impersonate=self.fp,
+            headers=self._h(HEADERS_HTML, {
+                "sec-fetch-site": "same-origin",
+                "referer": BASE + "/access/verification",
+            }),
+        )
+        if r.status_code != 200:
+            raise MuseError(f"refresh_onboarding {r.status_code}: {r.text[:120]}")
+        onboarding = parse_onboarding(r.text)
+        self.onboarding = onboarding
+        return onboarding
+
+    def ccv_status(self):
+        """GET /api/hatch/ccv-status → 'not_required' / 'ccv_required' / 'blocked' / None。
+
+        /access/verification（年齢確認）のページに留まっている間でも 200 を返す数少ない
+        エンドポイントで、未激活アカウントの状態把握に使える。"""
+        r = self.s.get(
+            BASE + "/api/hatch/ccv-status",
+            impersonate=self.fp,
+            headers=self._h(HEADERS_GET, {"sec-fetch-site": "same-origin", "referer": BASE + "/"}),
+        )
+        if r.status_code != 200:
+            return None
+        return (self._json(r) or {}).get("ccv_status")
 
     def accept_tos(self, onboarding=None):
         text = (onboarding or {}).get("disclosure_text")
@@ -464,8 +560,9 @@ class MuseClient:
         )
 
     def is_live(self):
+        """Hatch が使える状態か。/api/hatch/invite は POST が正なので POST で確認する。"""
         try:
-            return self.invite().status_code == 200
+            return self.scratch_code() is not None
         except Exception:
             return False
 
@@ -579,6 +676,9 @@ def parse_onboarding(html):
                 "is_geo_gated": status.get("isGeoGated"),
                 "has_hatch_access": status.get("hasHatchAccess"),
                 "waitlist_status": status.get("waitlistStatus"),
+                "ccv_status": status.get("ccvStatus"),
+                "has_completed_activation": status.get("hasCompletedActivation"),
+                "age_verification_methods": status.get("ageVerificationMethods"),
             })
         if "disclosureText" in obj or "disclosureVersion" in obj:
             disclosures.append((obj.get("disclosureText"), obj.get("disclosureVersion")))
@@ -592,6 +692,10 @@ def parse_onboarding(html):
                                if isinstance(t, str) and t.strip()))
     versions = list(dict.fromkeys(v for _, v in disclosures
                                   if isinstance(v, str) and v.strip()))
+    # 激活（/access/verification）路由：没有动态披露，但 status.ccvStatus 明确要求年龄确认
+    if (states and not texts and not versions
+            and states[0].get("ccv_status") not in (None, "", "not_required")):
+        return {"state": "verification_required", "reason": "ccv_required", **states[0]}
     if len(texts) != 1 or len(versions) != 1:
         return {"state": "unresolved", "reason": "disclosure_context_unresolved"}
     if versions[0] != "HATCH_ROW_v0":
