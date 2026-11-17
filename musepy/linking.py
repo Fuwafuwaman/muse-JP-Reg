@@ -22,6 +22,7 @@ Instagram / Facebook アカウントを連携させても解除できる。カ�
 `continue` が出れば連携成立＝年齢確認ゲートが外れる。
 """
 
+import contextlib
 import json
 import logging
 import random
@@ -61,40 +62,59 @@ ACTION_HINTS = {
     "restart_linking": "最初から連携をやり直す必要がある",
 }
 
-_POLL_INTERVAL = 3.0
+_POLL_INTERVAL = 5.0
 _POLL_TIMEOUT = 600.0
-# 20 件を同時に走らせると complete() が 429 を返しやすい。間隔をゆらして
-# 呼び出しの山を崩し、失敗したら指数バックオフで粘る。
-_POLL_JITTER = 0.4          # ポーリング間隔のゆらぎ（±40%）
-_MAX_ERR_BACKOFF = 12.0     # 連続失敗時の待ち時間の上限（秒）
-# それでも errs が上限を超え、かつ連続失敗が _COMPLETE_ERROR_GRACE 秒を
-# 超えたら、その試行は諦める。
-_MAX_COMPLETE_ERRORS = 60
-_COMPLETE_ERROR_GRACE = 180.0
+# complete() は「Meta 側がまだ解決していない」間、HTTP 429
+# {"error":"Failed to resolve account linking"} を返す（＝実質 pending の合図。
+# 1 本だけ・0.3 req/s でも 429 になるので、レート制限ではない）。よって 429 は
+# 失敗扱いせず、間隔どおり淡々とポーリングする。429 以外の連続失敗だけを粘る。
+_POLL_JITTER = 0.25         # ポーリング間隔のゆらぎ（±25%）
+_MAX_ERR_BACKOFF = 15.0     # 429 以外が続いたときの待ち時間の上限（秒）
+# 429 以外の失敗が errs を超え、かつ連続 _COMPLETE_ERROR_GRACE 秒を超えたら諦める。
+_MAX_COMPLETE_ERRORS = 10
+_COMPLETE_ERROR_GRACE = 60.0
 
-# プロセス全体で送信間隔を最低 _MIN_REQUEST_GAP 秒空ける（同時多発を平滑化）。
-_MIN_REQUEST_GAP = 0.2
-_throttle_lock = threading.Lock()
-_last_request = 0.0
+# 送信間隔と同時実行の上限（送信の山崩し。429 の主因ではないが安全側に倒す）。
+_MIN_REQUEST_GAP = 0.3      # 送信の最小間隔（秒）＝最大 3.3 req/s
+_MAX_INFLIGHT = 6           # 同時に飛ばす上限
+_slot_lock = threading.Lock()
+_slot_sem = threading.Semaphore(_MAX_INFLIGHT)
+_next_slot = 0.0
 
 
-def _throttle() -> None:
-    global _last_request
-    with _throttle_lock:
-        gap = time.time() - _last_request
-        if gap < _MIN_REQUEST_GAP:
-            time.sleep(_MIN_REQUEST_GAP - gap)
-        _last_request = time.time()
+@contextlib.contextmanager
+def _slot():
+    """送信枠を確保してから本体を実行する（終わったら枠を返す）。"""
+    global _next_slot
+    _slot_sem.acquire()
+    try:
+        with _slot_lock:
+            now = time.time()
+            send_at = max(now, _next_slot)
+            _next_slot = send_at + _MIN_REQUEST_GAP
+        delay = send_at - time.time()
+        if delay > 0:
+            time.sleep(delay)
+        yield
+    finally:
+        _slot_sem.release()
 
 
 class LinkingError(RuntimeError):
-    pass
+    def __init__(self, msg, status=None):
+        super().__init__(msg)
+        self.status = status
+
+    @property
+    def throttled(self):
+        """429（＝そのうち通る）かどうか。"""
+        return self.status == 429 or " 429:" in str(self)
 
 
 def _get_json(client, path):
-    _throttle()
-    r = client.s.get(BASE + path, impersonate=client.fp,
-                     headers=client._h(HEADERS_GET))
+    with _slot():
+        r = client.s.get(BASE + path, impersonate=client.fp,
+                         headers=client._h(HEADERS_GET))
     try:
         return r.status_code, (r.json() or {})
     except Exception:
@@ -102,9 +122,9 @@ def _get_json(client, path):
 
 
 def _post_json(client, path, body):
-    _throttle()
-    r = client.s.post(BASE + path, impersonate=client.fp,
-                      headers=client._h(HEADERS_JSON), data=json.dumps(body))
+    with _slot():
+        r = client.s.post(BASE + path, impersonate=client.fp,
+                          headers=client._h(HEADERS_JSON), data=json.dumps(body))
     try:
         return r.status_code, (r.json() or {})
     except Exception:
@@ -157,7 +177,8 @@ def complete(client, attempt_id):
     """1 回だけ完了チェックして next_action を返す。"""
     status, data = _post_json(client, COMPLETE_PATH, {"attempt_id": attempt_id})
     if status != 200:
-        raise LinkingError(f"linking-web-auth-completion {status}: {str(data)[:200]}")
+        raise LinkingError(f"linking-web-auth-completion {status}: {str(data)[:200]}",
+                           status=status)
     action = data.get("next_action")
     if action not in NEXT_ACTIONS:
         raise LinkingError(f"未知の next_action={action!r}: {str(data)[:200]}")
@@ -184,14 +205,24 @@ def wait(client, attempt_id, timeout=_POLL_TIMEOUT, interval=_POLL_INTERVAL,
             err_since = None
             backoff = max(1.0, interval)
         except LinkingError as exc:
+            if exc.throttled:
+                # 「まだ解決していない」だけ。失敗回数に数えず、間隔どおり続ける。
+                if log:
+                    log("link: まだ未解決（429）、待機中")
+                time.sleep(max(1.0, interval * random.uniform(1 - _POLL_JITTER,
+                                                             1 + _POLL_JITTER)))
+                continue
             errs += 1
             if err_since is None:
                 err_since = time.time()
-            if errs > _MAX_COMPLETE_ERRORS and (time.time() - err_since) > _COMPLETE_ERROR_GRACE:
-                raise
+            hard = exc.status is not None and 400 <= exc.status < 500
+            fatal = (errs > _MAX_COMPLETE_ERRORS
+                     and (time.time() - err_since) > _COMPLETE_ERROR_GRACE)
             if log:
                 log("link: 完了チェック失敗（%d 回目 / 連続 %.0fs、継続）: %s",
                     errs, time.time() - err_since, str(exc)[:120])
+            if hard or fatal:
+                raise
             backoff = min(_MAX_ERR_BACKOFF, backoff * 1.7)
             time.sleep(backoff * random.uniform(0.7, 1.3))
             continue
