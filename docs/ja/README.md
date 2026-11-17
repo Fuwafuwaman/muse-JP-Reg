@@ -5,7 +5,7 @@
 
 ## 読む順番
 
-1. [requirements.md](requirements.md) — **最初にこれ**。実際に必要なもの／不要なもの（住宅プロキシは必須ではない）、メール受信手段の比較、プロキシ無しでの運用手順、**ブラウザの FoxyProxy 等が効かない理由と正しい貼り付け先**。
+1. [requirements.md](requirements.md) — **最初にこれ**。実際に必要なもの／不要なもの（住宅プロキシは必須ではない）、メール受信手段の比較と**取込（インポート）の書式・422 の挙動・`failed` の扱い**、プロキシ無しでの運用手順、**ブラウザの FoxyProxy 等が効かない理由と正しい貼り付け先**。
 2. [architecture.md](architecture.md) — 全体構成、スレッドモデル、SSE、スティッキープロキシ、DB スキーマ、設定キー一覧。
 3. [registration-flow.md](registration-flow.md) — 登録プロトコル 10 フェーズの詳細（エンドポイント、成果物、失敗カテゴリ）。
 4. [invite-farming.md](invite-farming.md) — 招待コードの自己増殖（裂変）の仕組みと上限挙動。

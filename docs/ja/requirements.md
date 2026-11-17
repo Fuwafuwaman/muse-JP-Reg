@@ -97,6 +97,16 @@ SOAX の JP 住宅プロキシで実際に検証した記録です。同じ症�
 - **`cf_temp`**: Cloudflare Worker の一時メール実装を自前で立て、`cf_api_url`（Worker の URL）、`cf_admin_token`（管理トークン）、`cf_domain`（受信用ドメイン）を `/api/settings/mail` から保存します。プールが不要なので、`pooled` 系の枯渇待ちがありません。
 - **`icloud_relay`**: 外部の中継 URL を `email----relay_url` 形式で投入します。`import_icloud.py` を使うと、隣の `../icloud` ディレクトリのローカルサーバ（`http://127.0.0.1:4173`）から隠しメールを一括生成して取り込めます（環境変数 `ICLOUD_DB_PATH` で DB パスを上書き可、`import_icloud.py:20`）。
 
+### 取込（インポート）の書式と挙動
+
+- 取込が必要なのは**プール消費型の `outlook` / `icloud_relay` だけ**です。`cf_temp` は `line_segments = 0` で、毎回自分でアドレスを発行するため号池を使いません（`mail_providers/cf_temp.py:65`）。
+- 書式は `----` 区切りで、outlook 4 段（`email----password----client_id----refresh_token`）、icloud_relay 2 段（`email----relay_url`）。画面のプルダウンで種類を**明示**してください。4 段は Outlook と Gmail が同数で自動判別できないため、自動判定はあくまで保険です（`mail_providers/base.py:460-497`）。
+- 検証は**全行まとめて**行い、1 行でも不正なら**整批拒否**（HTTP 422）で号池は一切変更されません。行番号と理由が返ります（`base.py:500-545`）。同一メールの重複・メール書式の不正もこの段階で検出。空行と `#` 行はスキップ、BOM は除去。上限は 5,000 行 / 2 MiB（`base.py:87-88`）。
+- 既に居るメールは `kind` / `refresh_token` / `relay_url` のいずれかが変わったときだけ更新され、`available` に戻ります。同一内容なら skip です（`db.py:170-215`）。
+- ⚠️ **設定の `mail_source` と取込時の `kind` を必ず一致させてください。** `auto_loop.py:343-359` は `mail_source` と同一 `kind` の行しか claim しないため、不一致だと「可用邮箱」の数字だけが増えて 1 件も消費されません。
+- 状態は `available` → `in_use` → `done` / `failed`。`failed` は `fail_reason` を残し、**自動ループでは再使用されません**（`claim_next` は `available` のみを対象。`db.py:293-320`）。再挑戦するにはプール画面の「重置」/「重置选中」で `available` に戻します（`db.py:366` `bulk_reset_to_available`）。`in_use` のまま落ちた場合は `release_stale`（`db.py:392`、既定 1800 秒で自動解放、`app.py:37-42`）。
+- `../icloud` の 4173 を起動しておけば、取込画面の「ローカル iCloud の隠しメールを一括同期」ボタンで `unused` の隠しメールを自動投入できます（`/api/import/icloud_local` → `import_icloud.py` の `sync_icloud_to_muse`）。
+
 ## 注意点
 
 - `/api/settings/mail/test`（テスト受信）は **`cf_temp` でしか使えません**。`pooled=True` の方式では 400 を返します（`webui/app.py:660-666`）。`outlook` を選んだ場合、テスト受信の失敗は異常ではありません。
