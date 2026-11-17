@@ -83,3 +83,4 @@ flowchart TB
 - `used_up` が頻発するなら、そのコードの 30 回上限に既に達しています。プールでは自動で `exhausted` になるので、増殖は自然に次のコードへ移ります。
 - `invalid` が出るコードは腐っています。`/api/invites` から削除して構いません。
 - コードの貼り付けは URL 形式でも可（`https://muse.ai/?invite=XXXX` → `db.py` の `_clean_code` が抽出）。
+- バッチ（`POST /api/auto/start`）でも `invite_code` と `redeem_mode: "single"` を直接渡せるので、プールに入れずに 1 枚の種コードで回すこともできます（`ccv_mode` / `ccv_link_account_type` / `ccv_link_timeout` も同じ経路で上書き可。空文字・0 は `settings` の値にフォールバック）。

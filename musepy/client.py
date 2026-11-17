@@ -467,12 +467,11 @@ class MuseClient:
                     "referer": urlunsplit(("https", final.hostname, "/", "", "")),
                 }),
             )
-            fallback = parse_onboarding(follow.text) if follow.status_code == 200 else None
-            if not fallback or fallback["state"] == "unresolved":
+            if follow.status_code != 200:
                 raise MuseError(
-                    f"activate_session 最终落在非 muse.ai 域（{final.hostname}）"
-                    f"/{follow.status_code} {fallback and fallback.get('reason')}"
+                    f"activate_session 二次引导失败 {follow.status_code}（{final.hostname} 経由）"
                 )
+            # 解析できない場合も下段の ccv-status フォールバックに賭けて続行する
             final, r = urlsplit(BASE + "/"), follow
         onboarding = parse_onboarding(r.text)
         if onboarding["state"] == "waitlist":
@@ -485,6 +484,21 @@ class MuseClient:
             self.onboarding = onboarding
             return onboarding
         if onboarding["state"] != "disclosure":
+            # /access/verification の payload は status.ccvStatus を載せないことがあり、
+            # その場合 parse_onboarding は unresolved に落ちる。hatch の ccv-status を
+            # 正として「年齢確認待ち」に読み替える（誤って失敗扱いにしない）。
+            ccv = ""
+            try:
+                ccv = self.ccv_status() or ""
+            except Exception:
+                ccv = ""
+            if ccv and ccv != "not_required":
+                onboarding["state"] = "verification_required"
+                onboarding["reason"] = "ccv_required"
+                onboarding["ccv_status"] = ccv
+                onboarding["source_url"] = urlunsplit(("https", final.hostname, final.path or "/", "", ""))
+                self.onboarding = onboarding
+                return onboarding
             raise MuseError(f"disclosure_context_unresolved ({onboarding.get('reason')})")
         onboarding["source_url"] = urlunsplit(("https", final.hostname, final.path or "/", "", ""))
         self.onboarding = onboarding

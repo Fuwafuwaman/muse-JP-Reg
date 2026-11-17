@@ -791,7 +791,7 @@ def ensure_ccv(
         if action in linking_mod.SUCCESS_ACTIONS:
             out["status"] = "not_required"
             return out
-        out["status"] = "failed"
+        out["status"] = "pending" if action in ("pending", "stopped") else "failed"
         out["action"] = action
         out["error"] = error or f"link:{action} {linking_mod.describe(action)}"
         _link_failure_hint(action, linking_mod)
@@ -813,7 +813,7 @@ def ensure_ccv(
     if action in linking_mod.SUCCESS_ACTIONS:
         out["status"] = "not_required"
         return out
-    out["status"] = "failed"
+    out["status"] = "pending" if action in ("pending", "stopped") else "failed"
     out["action"] = action
     out["error"] = error or f"card:{error} / link:{action}"
     _link_failure_hint(action, linking_mod)
@@ -823,6 +823,8 @@ def ensure_ccv(
 def _link_failure_hint(action: Optional[str], linking_mod) -> None:
     if action == "use_credit_card":
         logger.warning("       👉 この Meta アカウントでは年齢確認に使えません。クレジットカードが必要です")
+    elif action in ("pending", "stopped"):
+        logger.warning("       👉 承認待ちのままです。URL をもう一度開いて承認してください")
     elif action == "timeout":
         logger.warning("       👉 承認が完了しませんでした。URL をもう一度開いて承認してください")
 

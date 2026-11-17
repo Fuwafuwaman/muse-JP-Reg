@@ -100,6 +100,10 @@ class AutoLoopStartReq(BaseModel):
     redeem_mode: str = "pool"         # "pool" | "none"
     auto_pool_own_code: bool = True
     stop_on_reject: bool = True
+    invite_code: str = ""
+    ccv_mode: str = ""                # 空 = settings の ccv_mode に従う (card | link | card_then_link)
+    ccv_link_account_type: str = ""   # 空 = settings に従う (facebook | instagram)
+    ccv_link_timeout: float = 0.0     # 0 以下 = settings に従う
     completion_retries: int = Field(4, description="注册资料提交被服务端暂缓(registrationBlocked)时的重试次数")
     completion_retry_delay: float = Field(20.0, description="注册资料重试间隔（秒）")
 
