@@ -1,9 +1,10 @@
 @echo off
 chcp 65001 >nul
-title 启动 Muse 批量注册服务
+title Muse 登録サービスを起動
 color 0B
 echo ========================================================
-echo        正在检查并启动 Muse 注册服务，请稍候...
+echo        Muse 登録サービスを起動しています。
+echo        iCloud リレーサービス ^(ポート 4173^) も同時に起動します...
 echo ========================================================
 
 set "BASE_DIR=%~dp0"
@@ -11,38 +12,41 @@ if "%BASE_DIR:~-1%"=="\" set "BASE_DIR=%BASE_DIR:~0,-1%"
 for %%I in ("%BASE_DIR%\..") do set "PARENT_DIR=%%~fI"
 set "ICLOUD_DIR=%PARENT_DIR%\icloud"
 
-:: 1. 检查并启动 iCloud 邮件中继服务 (端口 4173)
+set "PYDIR=%LOCALAPPDATA%\Programs\Python\Python312"
+if exist "%PYDIR%\python.exe" set "PATH=%PYDIR%;%PATH%"
+
+:: 1. iCloud リレーサービス (ポート 4173) の起動確認
 netstat -ano | findstr :4173 | findstr LISTENING >nul
 if %errorlevel% equ 0 (
-    echo [OK] iCloud 邮箱服务已在运行 (端口: 4173)
+    echo [OK] iCloud リレーサービスはすでに起動しています ^(ポート: 4173^)
 ) else (
     if exist "%ICLOUD_DIR%\src\server.mjs" (
-        echo [..] 正在启动 iCloud 邮箱服务 (端口: 4173)...
+        echo [..] iCloud リレーサービスを起動しています ^(ポート: 4173^)...
         start "iCloud-Service" /min cmd /c "cd /d "%ICLOUD_DIR%" && node src/server.mjs"
         ping 127.0.0.1 -n 3 >nul
     ) else (
-        echo [!] 未检测到 ..\icloud 目录，跳过 4173 服务启动
+        echo [!] ..\icloud フォルダが見つかりません。4173 のリレーサービスはスキップします
     )
 )
 
-:: 2. 检查并启动 Muse 注册 WebUI (端口 8766)
+:: 2. Muse 登録 WebUI (ポート 8766) の起動確認
 netstat -ano | findstr :8766 | findstr LISTENING >nul
 if %errorlevel% equ 0 (
-    echo [OK] Muse 注册 WebUI 已在运行 (端口: 8766)
+    echo [OK] Muse 登録 WebUI はすでに起動しています ^(ポート: 8766^)
 ) else (
-    echo [..] 正在启动 Muse 注册 WebUI 服务 (端口: 8766)...
+    echo [..] Muse 登録 WebUI を起動しています ^(ポート: 8766^)...
     start "Muse-WebUI" /min cmd /c "cd /d "%BASE_DIR%" && python start_webui.py --port 8766 --no-browser"
     ping 127.0.0.1 -n 4 >nul
 )
 
-:: 3. 打开浏览器
-echo [..] 正在打开浏览器: http://127.0.0.1:8766
+:: 3. ブラウザを開く
+echo [..] ブラウザで開いています: http://127.0.0.1:8766
 start http://127.0.0.1:8766
 
 echo ========================================================
-echo [OK] Muse 注册服务启动完成！
-echo      1. Muse 注册控制台: http://127.0.0.1:8766
-echo      2. iCloud 邮箱控制台: http://127.0.0.1:4173/tasks
+echo [OK] Muse 登録サービスの起動処理が完了しました
+echo      1. Muse 登録サービス画面: http://127.0.0.1:8766
+echo      2. iCloud タスク画面: http://127.0.0.1:4173/tasks
 echo ========================================================
-echo 本窗口将在 5 秒后自动关闭，后台服务会持续保持运行...
+echo このウィンドウは 6 秒後に自動で閉じます。停止するときは 停止服务.bat を実行してください...
 ping 127.0.0.1 -n 6 >nul

@@ -1,15 +1,23 @@
 @echo off
 chcp 65001 >nul
-title 停止 Muse 批量注册服务
+title Muse 登録サービスを停止しています
 echo ========================================================
-echo        正在停止 Muse 注册服务 (端口: 8766)...
+echo        Muse 登録サービスを停止しています ^(ポート: 8766)...
 echo ========================================================
 
+set "FOUND="
 for /f "tokens=5" %%a in ('netstat -aon ^| findstr :8766 ^| findstr LISTENING') do (
-    echo [..] 正在停止 Muse 注册 WebUI 服务 (PID: %%a)...
+    set "FOUND=1"
+    echo [..] Muse 登録 WebUI を停止しています ^(PID: %%a^)...
     taskkill /f /pid %%a >nul 2>&1
 )
 
-echo [OK] Muse 注册服务已停止 (端口 8766)
+if defined FOUND (
+    echo [OK] Muse 登録サービスを停止しました ^(ポート 8766^)
+) else (
+    echo [!] ポート 8766 で待ち受けているプロセスは見つかりませんでした。
+    echo     すでに停止しています。
+)
+
 echo ========================================================
 ping 127.0.0.1 -n 3 >nul
