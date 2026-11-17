@@ -386,8 +386,8 @@ onActivated(() => load())
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item v-for="f in exportFormats" :key="f.id" :command="f" :divided="f.mode === 'download'">
-                {{ f.label }}
-                <span v-if="f.note" class="hint" style="margin-left: 6px">{{ f.note }}</span>
+                {{ t(f.label) }}
+                <span v-if="f.note" class="hint" style="margin-left: 6px">{{ t(f.note) }}</span>
               </el-dropdown-item>
             </el-dropdown-menu>
           </template>
@@ -486,7 +486,7 @@ onActivated(() => load())
       <el-dialog v-model="exportVisible" width="720px" top="8vh">
         <template #header>
           <div style="display: flex; align-items: center; gap: 12px">
-            <span style="font-weight: 600">{{ t('导出') }} · {{ exportLabel }}</span>
+            <span style="font-weight: 600">{{ t('导出') }} · {{ t(exportLabel) }}</span>
             <el-tag size="small" type="info">{{ t('共 {n} 个账号', { n: exportCount }) }}</el-tag>
           </div>
         </template>
