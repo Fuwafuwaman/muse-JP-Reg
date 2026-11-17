@@ -611,7 +611,7 @@ def api_redeem_registered(req: RedeemAccountReq):
             if ok:
                 ccv_link.MANAGER.finish_for(email, "continue")
                 return
-            status = str((db.get_registered(email) or {}).get("ccv_status") or "")
+            status = str(((db.get_registered(email) or {}).get("extra") or {}).get("ccv_status") or "")
             if status and status != "ccv_required":
                 ccv_link.MANAGER.finish_for(email, "error", reason)
         except Exception:
