@@ -135,6 +135,10 @@ class RedeemAccountReq(BaseModel):
     invite_code: str = ""
     proxy: str = ""
     auto_pool_own_code: bool = True
+    # 空/0 なら設定値（/api/settings/ccv）を使う
+    ccv_mode: str = ""
+    ccv_link_timeout: float = 0.0
+    ccv_link_account_type: str = ""
 
 
 class BulkDeleteReq(BaseModel):
@@ -580,6 +584,39 @@ def api_redeem_registered(req: RedeemAccountReq):
     fail_count = 0
     harvested = []
 
+    # 画面で設定した CCV 方式（カード/連携）をそのまま使う。既定値のままだと
+    # デビットカードが弾かれる環境で、未解除アカウントの redeem が必ず失敗する。
+    ccv_opts = db.get_ccv_options()
+    ccv_kw = {
+        "ccv_card": db.get_ccv_card(),
+        "ccv_mode": (req.ccv_mode or "").strip().lower() or ccv_opts.get("ccv_mode") or "",
+        "ccv_link_account_type": (req.ccv_link_account_type or "").strip().lower()
+                                or ccv_opts.get("ccv_link_account_type") or "facebook",
+        "ccv_link_timeout": float(req.ccv_link_timeout or 0) or float(ccv_opts.get("ccv_link_timeout") or 0) or 600.0,
+    }
+
+    def _track_link(url: str, info: dict) -> None:
+        """redeem 中に切った承認 URL も /link 画面に出して人間が踏めるようにする。"""
+        try:
+            ccv_link.MANAGER.track(info.get("email") or "", url,
+                                   info.get("account_type") or "",
+                                   expires_at=info.get("expires_at"),
+                                   timeout=ccv_kw["ccv_link_timeout"])
+        except Exception:
+            pass
+
+    def _settle_link(email: str, ok: bool, reason: str = "") -> None:
+        """redeem で切った承認待ちの枠を結果で終端させる（解除待ちのままなら残す）。"""
+        try:
+            if ok:
+                ccv_link.MANAGER.finish_for(email, "continue")
+                return
+            status = str((db.get_registered(email) or {}).get("ccv_status") or "")
+            if status and status != "ccv_required":
+                ccv_link.MANAGER.finish_for(email, "error", reason)
+        except Exception:
+            pass
+
     for email in req.emails:
         cred = db.get_registered(email)
         if not cred:
@@ -594,12 +631,14 @@ def api_redeem_registered(req: RedeemAccountReq):
             continue
 
         try:
-            res = redeem_registered_account(cred, code, proxy=proxy)
+            res = redeem_registered_account(cred, code, proxy=proxy,
+                                            on_link_url=_track_link, **ccv_kw)
         except Exception as e:
             if mode == "pool":
                 db.finish_invite_code(code, False, "network_error")
             details[email] = {"ok": False, "reason": str(e)[:120]}
             fail_count += 1
+            _settle_link(email, False, str(e)[:120])
             continue
 
         if mode == "pool":
@@ -622,9 +661,11 @@ def api_redeem_registered(req: RedeemAccountReq):
                 if req.auto_pool_own_code:
                     db.import_invite_codes([own], max_uses=30, source=f"redeem:{email}")
             details[email] = {"ok": True, "reason": res["reason"], "own_code": own}
+            _settle_link(email, True)
         else:
             fail_count += 1
             details[email] = {"ok": False, "reason": res["reason"]}
+            _settle_link(email, False, res["reason"])
 
     return {
         "ok": True,

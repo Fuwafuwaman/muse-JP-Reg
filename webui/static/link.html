@@ -57,9 +57,16 @@
 
 <h2>進行中 <span id="activeCount" class="sub"></span></h2>
 <div class="toolbar">
+  <button class="primary" onclick="openAllTabs()">未承認の URL を全部タブで開く</button>
+  <button onclick="rearmAll()">全部の URL を出し直す</button>
   <button onclick="refresh()">今すぐ更新</button>
   <button onclick="clearDone()">完了分を消す</button>
   <span id="autoLabel" class="sub"></span>
+</div>
+<div class="note">
+  まとめて処理する場合は「全部タブで開く」→ 開いたタブで順に <b>「許可」/「続行」</b> を押していくだけです。
+  承認は数十秒でこのページに反映され、行の状態が <code>continue</code> に変わります。
+  URL が切れたら「全部の URL を出す直す」を押してから、また「全部タブで開く」で続けられます。
 </div>
 <div id="sessions"></div>
 
@@ -74,6 +81,31 @@
 const $ = (id) => document.getElementById(id);
 let autoRefresh = true;
 let busiest = false;
+let lastSessions = [];
+
+function openable() {
+  const now = Date.now() / 1000;
+  return lastSessions.filter((s) => s.url && !s.done && !s.expired && (!s.expires_at || s.expires_at > now + 20));
+}
+
+function openAllTabs() {
+  const list = openable();
+  if (!list.length) { alert("開ける URL がありません（すべて承認済みか、URL 未取得です）"); return; }
+  let opened = 0;
+  for (const s of list) { if (window.open(s.url, "_blank")) opened++; }
+  if (opened !== list.length) {
+    alert(opened + " / " + list.length + " 件だけ開きました。このページのポップアップを許可してから再試行してください。");
+  }
+}
+
+async function rearmAll() {
+  if (busiest) return;
+  busiest = true;
+  try {
+    await api("/api/ccv/link/rearm_all?timeout=1000", { method: "POST" });
+  } catch (e) { alert("出し直しに失敗: " + e.message); }
+  finally { busiest = false; refresh(); }
+}
 
 function stateClass(s) {
   if (s === "continue") return "state ok";
@@ -112,6 +144,7 @@ async function refresh() {
 
 function renderSessions(list) {
   const box = $("sessions");
+  lastSessions = list;
   const active = list.filter((s) => !s.done);
   $("activeCount").textContent = active.length ? "(" + active.length + " 件)" : "";
   if (!list.length) { box.innerHTML = '<div class="empty">まだ何も開始していません。</div>'; return; }
