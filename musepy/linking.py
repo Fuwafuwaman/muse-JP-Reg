@@ -61,6 +61,8 @@ ACTION_HINTS = {
 
 _POLL_INTERVAL = 3.0
 _POLL_TIMEOUT = 600.0
+# complete() が 429/5xx を返しても試行を捨てない（一時的な失敗で全体を落とさない）
+_MAX_COMPLETE_ERRORS = 5
 
 
 class LinkingError(RuntimeError):
@@ -146,10 +148,22 @@ def wait(client, attempt_id, timeout=_POLL_TIMEOUT, interval=_POLL_INTERVAL,
     """
     deadline = time.time() + max(1.0, float(timeout or _POLL_TIMEOUT))
     last = None
+    errs = 0
     while time.time() < deadline:
         if should_stop and should_stop():
             return "stopped"
-        action = complete(client, attempt_id)
+        try:
+            action = complete(client, attempt_id)
+            errs = 0
+        except LinkingError as exc:
+            errs += 1
+            if errs > _MAX_COMPLETE_ERRORS:
+                raise
+            if log:
+                log("link: 完了チェック失敗（%d/%d、継続）: %s",
+                    errs, _MAX_COMPLETE_ERRORS, str(exc)[:120])
+            time.sleep(max(0.5, min(interval * 2, 10.0)))
+            continue
         if action != last:
             if log:
                 log("link: %s（%s）", action, describe(action))

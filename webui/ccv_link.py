@@ -167,19 +167,40 @@ class LinkSession:
             action = res.get("next_action") or "pending"
             self.state = action
             if res.get("ok"):
-                db.save_registered({"email": self.email, "ccv_status": "not_required"})
-                logger.info(f"[ccv_link] {self.email} 年齢確認を解除した")
+                self._mark_cleared()
+            elif self._ccv_cleared(client):
+                # pending/stopped/error でも実際は解除済みのことがある
+                # （フロー側や別の試行で承認された場合）
+                action = "continue"
+                self.state = action
+                self._mark_cleared()
             else:
                 logger.info(f"[ccv_link] {self.email} 未解除: {action}（{linking.describe(action)}）")
         except Exception as exc:  # noqa: BLE001
             self.error = f"{type(exc).__name__}: {exc}"
             self.state = "error"
             logger.warning(f"[ccv_link] {self.email} 失敗: {self.error}")
+            try:
+                if client is not None and self._ccv_cleared(client):
+                    self.state = "continue"
+                    self._mark_cleared()
+            except Exception:
+                pass
         finally:
             if client is not None:
                 client.close()
             self.finished_at = time.time()
             self._url_ready.set()
+
+    def _ccv_cleared(self, client) -> bool:
+        try:
+            return client.ccv_status() == "not_required"
+        except Exception:
+            return False
+
+    def _mark_cleared(self) -> None:
+        db.save_registered({"email": self.email, "ccv_status": "not_required"})
+        logger.info(f"[ccv_link] {self.email} 年齢確認を解除した")
 
     def start(self) -> None:
         threading.Thread(target=self.run, name=f"ccvlink-{self.email}",
@@ -268,9 +289,13 @@ class LinkManager:
         email = (email or "").strip().lower()
         existing = self.active_for(email)
         if existing is not None:
-            existing.url = url or existing.url
+            if url and url != existing.url:
+                # フロー側が新しい試行を切った: 画面は新しい URL に差し替える
+                existing.url = url
+                existing.expires_at = expires_at
             existing.account_type = account_type or existing.account_type
             existing.state = "pending"
+            existing.finished_at = None
             return existing.to_dict()
         sess = LinkSession(email, account_type, timeout, external=True)
         sess.url = url

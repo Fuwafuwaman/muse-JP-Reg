@@ -55,6 +55,7 @@ class AutoLoopController:
         self._started_at: float = 0.0
         self._registered_ok = 0
         self._registered_waitlist = 0
+        self._registered_pending = 0
         self._registered_fail = 0
         self._ip_switches = 0
 
@@ -82,6 +83,7 @@ class AutoLoopController:
             self._started_at = time.time()
             self._registered_ok = 0
             self._registered_waitlist = 0
+            self._registered_pending = 0
             self._registered_fail = 0
             self._ip_switches = 0
             self._worker_status.clear()
@@ -233,12 +235,13 @@ class AutoLoopController:
                 "elapsed": (time.time() - self._started_at) if self._started_at else 0,
                 "registered_ok": self._registered_ok,
                 "registered_waitlist": self._registered_waitlist,
+                "registered_pending": self._registered_pending,
                 "registered_fail": self._registered_fail,
                 "ip_switches": self._ip_switches,
                 "max_per_ip": self._max_per_ip,
                 "target_count": self._target_count,
                 "remaining": (
-                    max(0, self._target_count - self._registered_ok)
+                    max(0, self._target_count - self._registered_ok - self._registered_pending)
                     if self._target_count else None
                 ),
                 "concurrency": self._concurrency,
@@ -274,12 +277,15 @@ class AutoLoopController:
 
     def _check_target_reached(self) -> bool:
         with self._lock:
-            if self._target_count and self._registered_ok >= self._target_count:
+            if self._target_count and (
+                self._registered_ok + self._registered_pending >= self._target_count
+            ):
                 if not self._stop_event.is_set():
                     self._stop_event.set()
                     self._last_message = (
                         f"🎯 已达成目标 {self._target_count} 个账号，自动停止 "
-                        f"(成功 {self._registered_ok} / 受限 {self._registered_waitlist} / 失败 {self._registered_fail})"
+                        f"(已激活 {self._registered_ok} / 未激活保留 {self._registered_pending} "
+                        f"/ 受限 {self._registered_waitlist} / 失败 {self._registered_fail})"
                     )
                     logger.info(self._last_message)
                 return True
@@ -311,7 +317,8 @@ class AutoLoopController:
                 self._worker_status.clear()
                 self._proxy_claims.clear()
                 self._last_message = (
-                    f"已结束 (成功 {self._registered_ok} / 地区受限 {self._registered_waitlist} "
+                    f"已结束 (已激活 {self._registered_ok} / 未激活保留 {self._registered_pending} "
+                    f"/ 地区受限 {self._registered_waitlist} "
                     f"/ 失败 {self._registered_fail} / 换IP {self._ip_switches} 次)"
                 )
             self._broadcast("state", self._snapshot())
@@ -351,7 +358,8 @@ class AutoLoopController:
                 if current_account is None:
                     with self._lock:
                         if self._target_count and (
-                            self._registered_ok + len(self._worker_status) >= self._target_count
+                            self._registered_ok + self._registered_pending
+                            + len(self._worker_status) >= self._target_count
                         ):
                             return
 
@@ -437,7 +445,8 @@ class AutoLoopController:
                     with self._lock:
                         self._registered_ok += 1
                         self._last_message = (
-                            f"成功 {self._registered_ok} / 受限 {self._registered_waitlist} / 失败 {self._registered_fail}"
+                            f"已激活 {self._registered_ok} / 未激活保留 {self._registered_pending} "
+                            f"/ 受限 {self._registered_waitlist} / 失败 {self._registered_fail}"
                         )
                     uses += 1
                     current_account = None
@@ -490,6 +499,31 @@ class AutoLoopController:
                             current_account = None
                     self._broadcast("state", self._snapshot())
                     continue
+
+                elif cat == "pending_redemption":
+                    # 账号已注册保留，只是年齢確認 (CCV) 未解除 / 邀请码未兑换。
+                    # 邮箱已 mark_done，不能当失败处理，否则 target_count 永远到不了。
+                    with self._lock:
+                        self._registered_pending += 1
+                        self._last_message = (
+                            f"未激活保留 {self._registered_pending} / 已激活 {self._registered_ok} "
+                            f"/ 受限 {self._registered_waitlist} / 失败 {self._registered_fail} "
+                            f"(最近: {real_email})"
+                        )
+                    uses += 1
+                    current_account = None
+                    retries = 0
+                    logger.info(f"[auto] {real_email} 已注册但未激活 ({stage})，保留等待人工解除")
+                    self._broadcast("run_finished", {
+                        "worker_id": worker_id,
+                        "email": real_email,
+                        "run_id": run_id,
+                        "ok": False,
+                        "category": cat,
+                    })
+                    if self._check_target_reached():
+                        self._broadcast("state", self._snapshot())
+                        return
 
                 elif cat == "region_waitlist":
                     with self._lock:
@@ -561,17 +595,18 @@ class AutoLoopController:
 
     def _wait_run_finish(self, run_id: str, timeout: int = 900) -> dict:
         deadline = time.time() + timeout
+        stop_deadline: Optional[float] = None
         while time.time() < deadline:
             row = db.get_run(run_id)
             if row and row.get("status") in ("done", "failed"):
                 return row
             if self._stop_event.is_set():
-                # 即使请求停止，也多等几秒让在途 run 写完状态
-                time.sleep(0.5)
-                row2 = db.get_run(run_id)
-                if row2 and row2.get("status") in ("done", "failed"):
-                    return row2
-                return row2 or {"status": "failed", "error": "stopped"}
+                # 停止要求後も在途 run は止めずに走り切らせる。
+                # 即 return すると run の分類が失われ、in_use のメールが取り残される。
+                if stop_deadline is None:
+                    stop_deadline = time.time() + 180
+                if time.time() >= stop_deadline:
+                    return row or {"status": "failed", "error": "stopped"}
             time.sleep(0.6)
         return {"status": "failed", "error": f"run timeout {timeout}s", "error_category": "timeout"}
 
