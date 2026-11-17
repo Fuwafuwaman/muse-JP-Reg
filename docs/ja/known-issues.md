@@ -2,6 +2,20 @@
 
 `df27ca5` 時点のソースを読んで見つかった粗さです。優先度は「このまま運用して痛いか」で付けています。根拠は `file:line`。
 
+## 最重要（ツール外の前提）: **クレジット**カードが 1 枚必要（年齢確認 CCV）
+
+コード側は対応済みで、**残っている唯一のブロッカーは「実在する日本発行のクレジットカード情報」**です。
+実カードで通した結果、`461935…`（PayPay 銀行発行 Visa **デビット**）はサーバに**明示的に拒否**されました。
+
+- 症状: `GET /api/hatch/ccv-status` が `{"ccv_status":"ccv_required"}` を返すアカウントは、`hasCompletedActivation` になる前に `/api/hatch/accept-tos` / `/api/hatch/stateful-sharing` / `/api/hatch/invite` / `/api/hatch/invite-code/redeem` が**すべて 403**（`POST /api/auth/check` は `hatchAdmissionInvalidated`）。→ 自分の招待コードが 1 つも出ない＝**裂変（増殖）が止まります**。
+- **デビット不可（実測）**: 実カードを入れても `POST /api/checkout/credential` が `code=1383254`「年齢確認のため、VisaまたはMastercardの**クレジットカード**を使用してください。**デビットカードは利用できません**。」を返します。BIN `461935` は PayPay 銀行発行の Visa CLASSIC **DEBIT** なので、この時点で通れません。→ **クレジットカードを用意する**のが唯一の解決策（コード修正では直りません）。
+- 仕様: `POST /api/checkout/*` は `paymentContainerMode:"LIVE"` で、金額は常に **1.00 USD**（JPY 400 相当のダミー）。カードは Meta Pay 側で実在照会されるため、**汎用テスト PAN（`4242…` / `4111…`）は拒否**されます（`2078022` = BIN 単位の一時ブロック、`facebook.com/help/1434403039959381` へ誘導）。
+- **診断のコツ（重要）**: `otcSessionId`/`otcType` を付けて撃つと、サーバは失敗理由を汎用コード `2078011` に**丸めて隠します**。理由を見るには otc を**3 呼び出し（init / ptt/encryption-key / checkout/credential）すべてから外した**状態で 1 周させる必要があります（credential だけ外すと `2078136` になります）。`musepy/ccv.py` は `2078011`/`2078132` のとき自動で otc なしの再走を挟み、両方の理由を 1 行の例外メッセージにまとめます。
+- 既知コード: `1383254`=クレジット必須／デビット不可、`2078022`=BIN 一時停止、`2078011`=otc 併用時の汎用エラー、`2078136`=otc の片側欠落／不一致、`1353114`=平文送信、`2992007`=Luhn 不一致、`2078132`/`2078135`=PTT 破損。
+- 対応: WebUI の「設定」→ メール設定 → `CCV: カード番号` / `有効期限 (MM/YY)` / `セキュリティコード` / `郵便番号` / `国コード` に入力します（`GET/POST /api/settings/ccv`、`db.CCV_FIELDS`）。解除処理は `auth_flow.py:473-475` が `accept-tos` の直前に `_gate_ccv` / `_activate_ccv` を自動実行します。
+- 検証状態: `musepy/ccv.py`（checkout init → credential → finalize → CCV activate、`$e2ee` PTT 暗号化）は実カードで `init` / `encryption-key` まで通り、credential でサーバから**理由付き**の拒否（`1383254`）を取得済み。カードをクレジットに替えればそのまま通る想定です。
+- 注意: 解除 1 回につき 1.00 USD の与信が走ります（実課金はされませんが、カード会社側の明細に出ます）。
+
 ## P0: 動かす前に直したい
 
 ### 1. ~~`httpx` が `requirements.txt` に無い~~ → 対応済み
