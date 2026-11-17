@@ -107,6 +107,19 @@ SOAX の JP 住宅プロキシで実際に検証した記録です。同じ症�
 - 状態は `available` → `in_use` → `done` / `failed`。`failed` は `fail_reason` を残し、**自動ループでは再使用されません**（`claim_next` は `available` のみを対象。`db.py:293-320`）。再挑戦するにはプール画面の「重置」/「重置选中」で `available` に戻します（`db.py:366` `bulk_reset_to_available`）。`in_use` のまま落ちた場合は `release_stale`（`db.py:392`、既定 1800 秒で自動解放、`app.py:37-42`）。
 - `../icloud` の 4173 を起動しておけば、取込画面の「ローカル iCloud の隠しメールを一括同期」ボタンで `unused` の隠しメールを自動投入できます（`/api/import/icloud_local` → `import_icloud.py` の `sync_icloud_to_muse`）。
 
+### Outlook の 4 段目・3 段目とは（`client_id` / `refresh_token`）
+
+`outlook` 方式の 1 行は `email----password----client_id----refresh_token` で、後ろ 2 つは OAuth のための情報です。パスワードだけでは受信できません。
+
+- **`client_id`**: Microsoft Entra ID のアプリ登録で発行される GUID。**アプリ（クライアント）の身分証**です。パブリッククライアントなので秘密にする必要はありません。例示の `9e5f94bc-xxxx` は Thunderbird が使っている公開クライアント ID の先頭です（`mail_providers/outlook.py:522`）。
+- **`refresh_token`**: そのアカウントで一度 OAuth 同意したときに発行される**長期の再発行券**です。これを使って短命な `access_token` を都度もらい、受信箱を読みます。パスワード変更や 2 段階認証があっても受信でき、Microsoft が個人向け Outlook.com の IMAP Basic 認証（パスワード）を廃止した後も使えるため、実質必須です。`client_id` と `refresh_token` は**ペア**で、別アプリの `client_id` に付け替えると `invalid_grant` / `invalid_client` になりがちです（`outlook.py:63-69` はこれを致命的エラーとして扱い、`registrar.py:221-222` がその行を `failed` にします）。
+- 実際の流れ: `_request_access_token`（`outlook.py:81`）が token endpoint 3 つを順に試す → `fetch_otp_via_graph`（Graph API の inbox / junkemail / deleteditems）→ 失敗時は IMAP XOAUTH2 → さらに失敗し password があればパスワード IMAP（`outlook.py:307-330`、`outlook.py:612-640`）。
+- 入手方法: 業者（接码平台）から買う場合は「**OAuth / refresh_token 付き**」を選び、抽出フォーマットで `----` の 4 段を指定すればほぼそのまま貼れます。手持ちアカウントから自分で作る場合は Microsoft の同意フロー（`code` → `token` 交換）を通します（このリポジトリに専用スクリプトはありません）。
+- ⚠️ **`email----password` の 2 段だけでは `outlook` として取込できません**。`parse_line` は 4 段厳密で（`outlook.py:556-558`）、2 段は `iCloud 中継 / OTP リンクプール` と解釈されます。3 段目・4 段目が無いアカウントは、そのままだと OTP を受け取れません。
+- 検証は `password` 省略可（空でも通る）ですが、列を保つため埋めるのが無難です。検証条件は `client_id` が非空・`refresh_token` が 20 文字以上です（`outlook.py:562-566`）。
+- 投入前に 1 件だけ試す: `python mail_outlook.py 'email----password----client_id----refresh_token'` → OTP が表示されれば生きています。
+- `refresh_token` は失効します（パスワード変更・長期間未使用・ユーザーによる取消しなど）。失効すると `invalid_grant` でその行は `failed` になり、再取得するか買い直すまで使えません。
+
 ## 注意点
 
 - `/api/settings/mail/test`（テスト受信）は **`cf_temp` でしか使えません**。`pooled=True` の方式では 400 を返します（`webui/app.py:660-666`）。`outlook` を選んだ場合、テスト受信の失敗は異常ではありません。
