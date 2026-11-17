@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { t } from '@/i18n'
+import { getProxyPool, saveProxyPool } from '@/api/proxy'
 
 const KEY = 'muse_proxy_pool_v1'
 
@@ -19,9 +20,41 @@ export const useProxyStore = defineStore('proxy', () => {
   const text = computed(() => list.value.join('\n'))
   const count = computed(() => list.value.length)
 
+  // 后端（settings.proxy_pool）才是真源：换浏览器/清缓存后仍能拿到同一份池。
+  // 本地 localStorage 只作为首屏缓存与离线兜底。
+  let hydrating = false
+  let pushTimer = null
+  const pushToServer = (v) => {
+    if (pushTimer) clearTimeout(pushTimer)
+    pushTimer = setTimeout(() => {
+      saveProxyPool(v).catch(() => {})
+    }, 400)
+  }
+
   watch(list, (v) => {
     try { localStorage.setItem(KEY, JSON.stringify(v)) } catch (_) {}
+    if (!hydrating) pushToServer(v)
   }, { deep: true })
+
+  async function syncFromServer() {
+    let remote = null
+    try {
+      const res = await getProxyPool()
+      remote = dedup(Array.isArray(res?.proxies) ? res.proxies : [])
+    } catch (_) {
+      return
+    }
+    if (remote.length) {
+      if (remote.join('\n') === list.value.join('\n')) return
+      hydrating = true
+      list.value = remote
+      await Promise.resolve()
+      hydrating = false
+    } else if (list.value.length) {
+      // 旧版本只有 localStorage，首次访问时把本地池迁移到后端
+      pushToServer(list.value)
+    }
+  }
 
   function setFromText(s) {
     const parsed = parseLines(s)
@@ -44,7 +77,10 @@ export const useProxyStore = defineStore('proxy', () => {
     list.value = []
   }
 
-  return { list, text, count, setFromText, append, remove, clear }
+  // 首次实例化时与后端对齐（后端为空且本地有内容则做一次性迁移）
+  syncFromServer()
+
+  return { list, text, count, setFromText, append, remove, clear, syncFromServer }
 })
 
 /**

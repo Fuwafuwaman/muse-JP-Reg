@@ -49,10 +49,10 @@ Edge に FoxyProxy を入れて住宅プロキシを設定しても、**この�
 
 | 目的 | 場所 |
 | --- | --- |
-| 自動ループ（推奨） | WebUI の `/proxy`（代理池）画面に 1 行 1 個で貼り、「上書き保存」。ブラウザの `localStorage` キー `muse_proxy_pool_v1` に保持され（`webui/frontend/src/stores/proxy.js:4`）、`/api/auto/start` の `proxy_pool` として送られます（`app.py:86`） |
+| 自動ループ（推奨） | WebUI の `/proxy`（代理池）画面に 1 行 1 個で貼り、「上書き保存」。保存先は**バックエンドの `settings.proxy_pool`**（`webui/db.py:1016` の `set_setting`、API は `GET` / `POST /api/proxy/pool`）で、`/api/auto/start` の `proxy_pool` として送られます（`app.py:86`）。ブラウザの `localStorage` キー `muse_proxy_pool_v1` は表示用キャッシュで、起動時にサーバー側と自動で同期します（`webui/frontend/src/stores/proxy.js`） |
 | 手動で 1 件だけ | 各画面の proxy 入力欄（`MuseFlow(proxy=...)` にそのまま渡ります） |
 
-代理池画面の「测试全部 / 测试」ボタン（`webui/frontend/src/views/ProxyPool.vue:103`・同 `:147`）は `POST /api/proxy/test`（`app.py:313-351`）を呼び、**出口 IP と遅延**を表示します。直結時と違う IP が出れば経路が切り替わったと確認できます。
+代理池画面の「テスト全部 / テスト」ボタン（`webui/frontend/src/views/ProxyPool.vue:103`・同 `:147`）は `POST /api/proxy/test`（`app.py:313-351`）を呼び、**出口 IP と遅延**を表示します。直結時と違う IP が出れば経路が切り替わったと確認できます。
 
 ### 実測（SOAX 住宅プロキシ・407 の見分け方）
 
@@ -73,6 +73,7 @@ http://country-jp-network-res_mob-onerror-retry_3-bind-node-session-muse1:MaMHw6
 - SOAX のユーザー名は `<国>-<ネットワーク種別>-<失敗時リトライ回数>-bind-node-session-<名前>` の並びで組み立てます。上の指定は **日本 (JP) / モバイル回線 / 失敗時 3 回リトライ / ノード固定 / セッション名 `muse1`** です。パスワードはパッケージキーそのもの（`MaMHw6F1G1`）です。
 - 代理池画面に貼って「上書き保存」→ 一覧に 1 行入り、形式欄が「正常」、テスト欄が「正常」＋出口 IP になりました。時間を空けて 2 回テストすると `14.11.202.129`（岐阜・KDDI）→ `219.104.128.180`（千葉・Sony）と**別 IP が返ります**（いずれも日本）。
 - ⚠️ `-session-<名前>` を含めると、その名前を共有するリクエストは**同じ IP に固定**されます。全自動バッチで IP を回したいときは、セッション名をリクエストごとに変える（`-session-` を外す）か、`max_per_ip` の分割に任せてください。
+- 代理池はバックエンドの `settings.proxy_pool` に保存されるため、**Edge から開いても・アプリ内ブラウザから開いても同じ内容**が見えます。ブラウザの `localStorage` を消しても、起動時にサーバー側から復元されます（`stores/proxy.js` の `syncFromServer()`）。逆に、この WebUI を共有している全員が同じ池を使う点に注意してください。
 - 全自動バッチ画面の「代理池」欄が「代理池已配 1 条」になっていれば、`proxy_pool` として `POST /api/auto/start` に送られています（`webui/frontend/src/views/AutoLoop.vue:42`）。代理池が空のときだけ「单次注册」画面の単条プロキシにフォールバックします。
 
 ### 受け付ける形式
