@@ -65,6 +65,16 @@
 - **Instagram 経路は AC まで到達できますが、同意画面の「次へ」が反応しません**: `linking-options` は `instagram` も返し、`?account_type=instagram` で URL も出ます。実際に進めると `accounts/login/?force_authentication&next=…` のプロフィール行（「次へ」）は動き、`fxcal` の同意画面（「MetaがInstagramアカウントの情報にアクセスする必要があります。」）まで来ますが、そこで「次へ」が無反応です。
   - **唯一効く操作は「フォーカスして Enter」**: ボタンは `div[role=button] tabindex=0` で、`onClick` は**存在する**（`__reactProps$…onClick` が function）のに実マウスクリック・`.click()`・`force=True` のいずれも不発です。`el.focus()` → `keyboard.press("Enter")` でだけ `accountscenter.meta.com/add_accounts/…` へ進みます（同画面の「別のアカウントでログイン」はクリックでも動くので、画面全体が死んでいるわけではありません）。
   - 進んだ先は FB と同じ「追加済み」なので、IG に切り替えても上記の壁は越えられません。
+- **AC 未登録の Meta プロフィールを作る＝新規 Instagram サインアップは、携帯 SMS で止まります（実測）**: 「1 件の Meta アカウントを使い回せない」以上、20 件ぶんの未登録プロフィールを作る必要があります。IG のサインアップは メール OTP → 画像キャプチャ → 携帯電話番号 の順で、**前 2 段は自動化できました**（メールは本リポジトリの Outlook provider、キャプチャは OCR）。残る SMS が壁です。
+  - メール OTP 画面は `<input>` が 1 つも無く、素の `textarea` だけです（`document.querySelectorAll('input')` が空）。`querySelector('textarea')` に文字を入れ、`次へ` を focus + Enter で送ります。
+  - 画像キャプチャは `ddddocr`（`beta=True` ＋画像を 3〜5 倍に拡大、複数条件の多数決）で突破できました。1 回の単発推論だと `79` を `E9` と誤読します。
+  - **無料の日本番号は現状ほぼ枯渇**: `text-verification.net/country/JP` は 43 件の番号を出しますが、**表示されるメッセージが固定のサンプル**です（相対時刻が「5 分前」のまま進まず、`Enter 819020` のようなコードも全番号で同じ値）。実際に Instagram の SMS が届いた番号でも、そのコードは `コードが間違っています` で弾かれます。`receive-sms.cc` の Japan は 0 件、`receive-smss.com` / `quackr.io` / `temporary-phone-number.com` / `sms-online.co` に日本は置かれていません。`5sim` の Instagram×Japan は在庫 0 です。
+  - `quackr.io` は番号を `+37062027***` のように伏せますが、**遷移先 URL に完全な番号が入ります**（`/temporary-numbers/<国>/<番号>`）。受信箱は「Waiting on incoming messages…」で自動更新される実物です。
+  - **Instagram は SMS 送信にアカウント単位の上限があります**: 1 時間に 6 回ほど撃つと `SMSコードの上限に達しました: リクエストできるSMSコードの上限に達しました。次のコードを受け取るには24時間待つ必要があります` で丸 1 日止まります（番号を変えても解除されません）。**番号は最初の 1 回で当てる前提**で選んでください。
+  - 国コードの切り替えは、画面の `JP +81` を開き、一覧の該当行（例: `リトアニア+370`）をクリックします。行は `<div>` で、`textContent` が `リトアニア+370` と完全一致する**最も深い要素**を拾うと当たります（`+370` だけの検索だと親要素に化けます）。
+  - 20 件を回すなら、無料番号の枯渇を考えると**有料 SMS（`5sim` / `sms-activate` 等の日本番号、実勢 1 件 数十円）**が現実的です（日本在庫は 5sim が 0 なので sms-activate 側を確認）。
+  - 現況: 1 件の IG はメール認証とキャプチャを突破し、携帯 SMS 待ちのまま上限で 24 時間停止しています。
+  - 参考（環境）: この環境では Playwright の `connect_over_cdp` が 60 秒で `TimeoutError` になる一方、`GET /json/version` の `webSocketDebuggerUrl` へ**生の WebSocket** で繋ぐと即座に通ります。`Target`/`Runtime.evaluate` を直に撃つ小さなヘルパで足ります（`Page.reload` の後はページ target の id が変わるので、URL から引き直してください）。
 
 ### カード経路（`ccv_mode=card` のとき）: **クレジット**カードが 1 枚必要
 
