@@ -33,7 +33,7 @@ _AUTO_REARM_INTERVAL = 90.0    # 監視周期（秒）
 _AUTO_REARM_MARGIN = 150.0     # 残り寿命がこれ未満になったら出し直す
 _AUTO_REARM_COOLDOWN = 45.0    # 同じメールを立て続けに出し直さない間隔
 _AUTO_REARM_WAIT = 8.0         # 出し直し 1 件あたりの URL 待ち（秒）
-_AUTO_REARM_STATES = frozenset({"pending", "error"}) | linking.RETRY_ACTIONS
+_AUTO_REARM_STATES = frozenset({"pending"}) | linking.REARM_ACTIONS
 
 
 def _build_client(email: str, proxy: str = "") -> MuseClient:

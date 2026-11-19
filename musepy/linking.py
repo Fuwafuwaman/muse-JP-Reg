@@ -40,9 +40,10 @@ COMPLETE_PATH = "/api/hatch/age-confirmation/linking-web-auth-completion"
 LINK_ACCOUNT_TYPES = ("facebook", "instagram")
 DEFAULT_ACCOUNT_TYPE = "facebook"
 
-# サーバが返しうる next_action の全量（フロントエンドの定義と一致させること）
+# サーバが返しうる next_action の全量（フロントエンドの定義と一致させること）。
+# `error` だけはフロントの定義に無いが実測で返る（Meta 側が解決に失敗した合図）。
 NEXT_ACTIONS = ("pending", "continue", "blocked", "use_credit_card",
-                "retry_auth", "restart_linking")
+                "retry_auth", "restart_linking", "error")
 
 # 続行不能＝ポーリングをやめてよい next_action
 TERMINAL_ACTIONS = frozenset(a for a in NEXT_ACTIONS if a != "pending")
@@ -53,6 +54,9 @@ SUCCESS_ACTIONS = frozenset({"continue"})
 # 人間の承認やり直しが要る next_action
 RETRY_ACTIONS = frozenset({"retry_auth", "restart_linking"})
 
+# 新しい承認 URL を出し直せば前に進める next_action（再試行＝rearm の対象）
+REARM_ACTIONS = RETRY_ACTIONS | {"error"}
+
 ACTION_HINTS = {
     "pending": "Meta 側の承認待ち",
     "continue": "連携成立。年齢確認ゲートが解除された",
@@ -60,6 +64,7 @@ ACTION_HINTS = {
     "use_credit_card": "連携は通ったが年齢確認には使えず、クレジットカードが必要",
     "retry_auth": "承認をやり直す必要がある（retry_attempt_id を付けて再開）",
     "restart_linking": "最初から連携をやり直す必要がある",
+    "error": "Meta 側で解決に失敗した。承認 URL を出し直してやり直すこと",
 }
 
 _POLL_INTERVAL = 5.0
