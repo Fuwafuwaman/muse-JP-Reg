@@ -5,8 +5,9 @@
 ## なぜ成立するか
 
 - 招待コードにはサーバ側で `max_uses = 30` の上限があります。プール側も同じ 30 を既定値として持っています（`db.py` の `invite_codes.max_uses DEFAULT 30`）。
-- 交換に成功したアカウントは、そのアカウント**専用の招待コード（`own_code`）**を取得できます（`GET /api/hatch/invite`）。
+- 交換に成功したアカウントは、そのアカウント**専用の招待コード（`own_code`）**を取得できます（`POST /api/hatch/invite`。`GET` ではコード発行前は `code:null` が返るので、発行は POST が実体です）。
 - 取得した `own_code` は `on_own_code` 経由で自動的にプールへ投入され、再び 30 回使える 1 枚になります（`registrar.py:119-127`）。
+- 交換は**アカウントにつき生涯 1 回**です。既に交換済みのアカウントに 2 枚目を渡すと `already_redeemed` が返り、消費も `own_code` の再発行もありません（種コードを別アカウントへ回すときはこの性質を利用します）。
 
 結果として、初期コード 1 枚から 30 アカウント → 最大 30 枚 → 900 アカウント…と増えていきます。ただし各アカウントの `own_code` は**サーバがまだ割り当てていないと空**（`own_code_status = "pending"`）になるため、増殖は必ずしも等比にはなりません。
 
@@ -23,7 +24,7 @@ flowchart TB
     D -->|"reason = used_up / invalid"| F["finish_invite_code(code, False, reason)<br/>exhausted or invalid に固定"]
     F -->|"attempt < 5"| C
     F -->|"5 回失敗"| G["registered_pending_redemption<br/>pool_codes_exhausted_retries"]
-    E --> H["scratch_code()<br/>GET /api/hatch/invite から own_code 抽出"]
+    E --> H["scratch_code()<br/>POST /api/hatch/invite で own_code 発行"]
     H -->|own_code あり| I["on_own_code<br/>import_invite_codes([own], max_uses=30)"]
     I --> P
     H -->|空| J["own_code_status = pending<br/>後から check_live で回収可"]
@@ -66,7 +67,21 @@ flowchart TB
 2. 生存確認時: `/api/registered/check_live` が `fetch_own_code=True` で回収 → `source="check:<email>"`（`app.py:497-535`）
 3. まとめ补兑時: `/api/registered/redeem` が完了後に回収 → `source="redeem:<email>"`（`app.py:537-606`）
 
-`own_code` の取得は `client.scratch_code()`（`GET /api/hatch/invite`）です。
+`own_code` の取得は `client.scratch_code()`（`POST /api/hatch/invite`）です。読み出しだけなら `client.invite()`（`GET /api/hatch/invite`）/ `GET /api/hatch/invite-code` でも同じコードが取れます。
+
+## 交換前に必要な前提（重要）
+
+`/api/hatch/*` は**オンボーディング完了前は全部 403** です。交換（redeem）も自分のコード発行も同じで、次の順で踏んでから撃ちます（`auth_flow.redeem_registered_account` の順序）。
+
+1. `GET /api/hatch/ccv-status` が `not_required` であること（未解除なら `ensure_ccv` で先に解除。→ `known-issues.md`）
+2. `POST /api/auth/activate`（`client.activate_session`）
+3. `POST /api/hatch/accept-tos`（`disclosure_text` / `disclosure_version` は 2 のページから取る。既に同意済みのアカウントはアプリ画面に着地して披露文が無いので、その場合はスキップして進めてよい）
+4. `GET /?aymh_complete=1`（`client.refresh_onboarding`）
+5. `POST /api/hatch/vm/wake`（`client.wake_vm`）
+6. `POST /api/hatch/stateful-sharing`
+7. `POST /api/hatch/invite-code/redeem` で交換 → 成功後 `POST /api/hatch/invite` で自分のコードを発行
+
+403 のままなら「解除漏れ」か「3〜6 の踏み残し」を疑ってください。プロキシやコードのせいではありません。
 
 ## 「待ち」からの復帰（补兑）
 

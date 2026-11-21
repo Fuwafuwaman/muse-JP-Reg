@@ -418,7 +418,7 @@ class MuseClient:
             raise MuseError("activate_session 重定向目标不受信任")
         return urlunsplit(("https", parts.hostname, parts.path or "/", parts.query, ""))
 
-    def activate_session(self, frl_access_token):
+    def activate_session(self, frl_access_token, tolerant=False):
         if not isinstance(frl_access_token, str) or not frl_access_token.strip():
             raise MuseError("activate_session 缺少 frl_access_token")
         url, method, hops = BOOTSTRAP_URL, "POST", 0
@@ -496,6 +496,13 @@ class MuseClient:
                 onboarding["state"] = "verification_required"
                 onboarding["reason"] = "ccv_required"
                 onboarding["ccv_status"] = ccv
+                onboarding["source_url"] = urlunsplit(("https", final.hostname, final.path or "/", "", ""))
+                self.onboarding = onboarding
+                return onboarding
+            if tolerant:
+                # 既に accept-tos 済みのアカウントは、アプリ画面に着地してしまい
+                # ROW の動的披露文が HTML から取れない（= 再同意は不要）。失敗にせず返す。
+                onboarding["state"] = "disclosure_missing"
                 onboarding["source_url"] = urlunsplit(("https", final.hostname, final.path or "/", "", ""))
                 self.onboarding = onboarding
                 return onboarding

@@ -79,10 +79,91 @@ def case_unknown_version():
     assert out["reason"] == "disclosure_version_unsupported", out
 
 
+def case_tolerant_activate_session():
+    """accept-tos 済みのアカウントは動的披露文が取れない。tolerant なら失敗にしない。"""
+    from musepy.client import MuseClient, MuseError
+
+    class _Resp:
+        status_code, headers = 200, {}
+
+        def __init__(self, text):
+            self.text = text
+
+    class _Sess:
+        def __init__(self, resp):
+            self._resp = resp
+
+        def post(self, *a, **k):
+            return self._resp
+
+        def get(self, *a, **k):
+            return self._resp
+
+    # status 行だけの payload（disclosureText が無い）→ parse_onboarding は unresolved
+    status = {"result": "success", "resolvedDestination": "main_app",
+              "status": {"isGeoGated": False, "hasHatchAccess": True}}
+    doc = _html(_row("1a2b", status))
+
+    def _client():
+        cl = MuseClient(proxy="", lang="ja", timeout=10)
+        cl.s = _Sess(_Resp(doc))
+        cl.ccv_status = lambda: ""
+        return cl
+
+    out = _client().activate_session("tok", tolerant=True)
+    assert out["state"] == "disclosure_missing", out
+    assert not out.get("disclosure_text") and not out.get("disclosure_version"), out
+    try:
+        _client().activate_session("tok")
+        raise AssertionError("strict のはずが例外が出ない")
+    except MuseError as exc:
+        assert "disclosure_context_unresolved" in str(exc), exc
+
+
+def case_ccv_no_finalize():
+    """finalize=False は /api/checkout/finalize を撃たずに ccv_status を返す。"""
+    from musepy import ccv
+
+    calls = []
+
+    def fake_start_checkout(client, *a, **k):
+        calls.append("start_checkout")
+        return ({"upl_session_id": 1, "order_id": "o", "money": {"amount": 1.0, "currency": "USD"},
+                 "common": {}, "container_mode": "LIVE", "otc": {}, "country_code": "JP",
+                 "money_amount": 1.0}, {"mutation": {"success": True, "credentialId": "c1"}, "nextAction": None})
+
+    def fake_post_json(client, path, payload):
+        calls.append(path)
+        return 200, {"checkoutStatus": "SUCCESS"}
+
+    class _Client:
+        def ccv_status(self):
+            return "not_required"
+
+    orig_start, orig_post = ccv.start_checkout, ccv._post_json
+    ccv.start_checkout, ccv._post_json = fake_start_checkout, fake_post_json
+    try:
+        res = ccv.activate(_Client(), "4549240653688285", "09/30", "226", log=lambda *a: None, finalize=False)
+        assert res["finalized"] is False, res
+        assert res["ccv_status"] == "not_required", res
+        assert "/api/checkout/finalize" not in calls, calls
+        assert "finalize" not in " ".join(res["steps"]), res["steps"]
+
+        calls.clear()
+        res = ccv.activate(_Client(), "4549240653688285", "09/30", "226", log=lambda *a: None)
+        assert res["finalized"] is True, res
+        assert res["checkout_status"] == "SUCCESS", res
+        assert "/api/checkout/finalize" in calls, calls
+    finally:
+        ccv.start_checkout, ccv._post_json = orig_start, orig_post
+
+
 def main():
     tests = [("normal_disclosure", case_normal), ("waitlist", case_waitlist),
              ("geo_gated", case_geo_gated), ("disclosure_conflict", case_conflict),
-             ("disclosure_missing", case_missing), ("unknown_version", case_unknown_version)]
+             ("disclosure_missing", case_missing), ("unknown_version", case_unknown_version),
+             ("tolerant_activate_session", case_tolerant_activate_session),
+             ("ccv_no_finalize", case_ccv_no_finalize)]
     for name, fn in tests:
         fn()
         print(f"[PASS] {name}")

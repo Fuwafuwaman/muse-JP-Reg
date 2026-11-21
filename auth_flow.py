@@ -704,11 +704,16 @@ def check_account_live(
                 or data.get("inviteCode")
                 or (cred.get("own_code") or "").strip()
             )
-            if not own and fetch_own_code and cred.get("status") == "redeemed":
+            if not own and fetch_own_code:
+                # GET /api/hatch/invite は「コード発行前」だと code=null を返す。
+                # 自コードの実体は POST 側（scratch_code）なので、POST で取りに行く。
                 try:
+                    client.wake_vm()
                     own = client.scratch_code() or ""
                 except Exception:
                     own = ""
+                if not own:
+                    own = (cred.get("own_code") or "").strip()
             return {
                 "status": "live",
                 "label": "活号 (200)",
@@ -717,6 +722,20 @@ def check_account_live(
         if resp.status_code == 401:
             return {"status": "token_invalid", "label": "会话失效 (401)"}
         if resp.status_code == 403:
+            # 403 は「Hatch 権限なし」ではなく、未完了のオンボーディング（accept_tos /
+            # wake_vm）が残っているだけのことが多い。VM を起こしてから再度試す。
+            if fetch_own_code:
+                try:
+                    client.wake_vm()
+                    client.stateful_sharing()
+                    if resp2 := client.invite():
+                        if resp2.status_code == 200:
+                            own = (client._json(resp2) or {}).get("code") or ""
+                            if not own:
+                                own = client.scratch_code() or ""
+                            return {"status": "live", "label": "活号 (403→wake で解消)", "own_code": own}
+                except Exception:
+                    pass
             return {"status": "forbidden", "label": "无Hatch权限 (403)"}
         return {"status": "error", "label": f"HTTP {resp.status_code}"}
     finally:
@@ -733,11 +752,13 @@ def ensure_ccv(
     on_link_url: Optional[Callable[[str, dict], None]] = None,
     email: str = "",
     on_msg: Optional[Callable[[str], None]] = None,
+    no_charge: bool = True,
 ) -> dict:
     """CCV が未解除なら解除する（カード登録 → 必要なら連携にフォールバック）。
 
     戻り値 ``{"status": 解除後の ccv_status, "error": 理由, "action": link の next_action}``。
     ``status`` が ``not_required`` なら解除成功。
+    ``no_charge`` はカード登録だけで解除し finalize（1.00 USD 与信）を省略する。
     """
     from musepy import ccv as ccv_mod
     from musepy import linking as linking_mod
@@ -772,20 +793,31 @@ def ensure_ccv(
             logger.warning(f"       ⚠️ 年齢確認が必要 (ccv_status={status}) ですがカードが未設定です")
             return "カード未設定"
         say(f"💳 年齢確認 (ccv_status={status}) をカード登録で解除します...")
+        card_kwargs = dict(
+            card_number=str(card.get("card_number") or "").replace(" ", "").replace("-", ""),
+            expiry=str(card.get("expiry") or ""),
+            cvv=str(card.get("cvv") or ""),
+            zip_code=str(card.get("zip") or "1000001"),
+            country_code=str(card.get("country") or "") or None,
+            log=lambda msg, *a: logger.info("       " + (msg % a if a else msg)),
+        )
+        # 1 回目は finalize を撃たない（= 1.00 USD の LIVE 与信を作らない）。
+        # カード登録(credential)の時点で ccv_status は not_required に変わる。
         try:
-            res = ccv_mod.activate(
-                client,
-                card_number=str(card.get("card_number") or "").replace(" ", "").replace("-", ""),
-                expiry=str(card.get("expiry") or ""),
-                cvv=str(card.get("cvv") or ""),
-                zip_code=str(card.get("zip") or "1000001"),
-                country_code=str(card.get("country") or "") or None,
-                log=lambda msg, *a: logger.info("       " + (msg % a if a else msg)),
-            )
+            res = ccv_mod.activate(client, finalize=not no_charge, **card_kwargs)
         except Exception as exc:
             logger.warning(f"       ❌ カードでの解除に失敗: {exc}")
             return str(exc)
-        logger.info(f"       ✅ 年齢確認(CCV)をカードで解除しました credential={res.get('credential_id')}")
+        if no_charge and res.get("ccv_status") in ("", "ccv_required"):
+            # 与信を作らないと解除されないカードは finalize 付きで撃ち直す
+            say("       与信なしでは解除されないため finalize 付きで再試行します...")
+            try:
+                res = ccv_mod.activate(client, **card_kwargs)
+            except Exception as exc:
+                logger.warning(f"       ❌ カードでの解除に失敗(finalize): {exc}")
+                return str(exc)
+        logger.info(f"       ✅ 年齢確認(CCV)をカードで解除しました credential={res.get('credential_id')} "
+                    f"finalize={res.get('finalized')}")
         return ""
 
     def try_link():
@@ -861,10 +893,15 @@ def _ensure_ccv(client: MuseClient, ccv_card: Optional[dict],
                 link_account_type: str = "facebook",
                 link_timeout: float = 600.0,
                 on_link_url: Optional[Callable[[str, dict], None]] = None,
-                email: str = "") -> str:
-    """CCV 未解除なら解除する。戻り値は解除後の ccv_status。"""
+                email: str = "",
+                no_charge: bool = True) -> str:
+    """CCV 未解除なら解除する。戻り値は解除後の ccv_status。
+
+    `no_charge=True` はカード登録だけで解除し、/api/checkout/finalize（1.00 USD の
+    LIVE 与信）を撃たない。与信が通らないカードでも年齢確認は通る。
+    """
     res = ensure_ccv(
-        client, card=ccv_card, mode=ccv_mode,
+        client, card=ccv_card, mode=ccv_mode, no_charge=no_charge,
         link_account_type=link_account_type, link_timeout=link_timeout,
         on_link_url=on_link_url, email=email,
     )
@@ -904,7 +941,7 @@ def redeem_registered_account(
             client.set_session_cookie(sess_val)
         cur_status = (cred.get("status") or "").strip()
         if access_token and (cur_status in ("registered_unactivated", "registered_waitlist", "") or not sess_val):
-            onboarding = client.activate_session(access_token)
+            onboarding = client.activate_session(access_token, tolerant=True)
             # 年齢確認ゲートが残っていると accept-tos / redeem が 403 になるので解除する
             if onboarding.get("verification_required") or str(onboarding.get("ccv_status") or "") not in ("", "not_required"):
                 _ensure_ccv(client, ccv_card, ccv_mode, ccv_link_account_type,
@@ -914,7 +951,9 @@ def redeem_registered_account(
                     onboarding = client.refresh_onboarding()
                 except Exception:
                     pass
-            client.accept_tos(onboarding)
+            # disclosure_missing（accept-tos 済みで動的披露文が取れない）ときは再同意不要
+            if onboarding.get("disclosure_text") and onboarding.get("disclosure_version"):
+                client.accept_tos(onboarding)
         else:
             # アクティベーション済みでも CCV が未解除なら 403 のままなので解除しておく
             _ensure_ccv(client, ccv_card, ccv_mode, ccv_link_account_type,

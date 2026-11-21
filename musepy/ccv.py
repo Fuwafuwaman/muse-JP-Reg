@@ -199,6 +199,9 @@ ERROR_HINTS = {
     "2078135": "PTT の署名フィールド不正",
     "2078136": ("otc の不整合。otcSessionId だけ送って otcType を送っていない、または "
                 "encryption-key で束ねた otc と credential で宣言した otc が食い違っている"),
+    "2078073": ("カード 1 枚あたりの上限。1 枚で通せるのは 10 アカウントまでで、11 枚目から"
+                "「このカードが関連付けられている広告アカウントが多すぎます」で拒否される。"
+                "別のクレジットカードを用意するか、時間を置く。デビットは 1383254 で弾かれる"),
 }
 
 # otc（otcSessionId/otcType）付きだと理由が伏される汎用コード。
@@ -340,10 +343,15 @@ def start_checkout(client, card_number, expiry_month, expiry_year, cvv, zip_code
 # --------------------------------------------------------------------------- #
 
 def activate(client, card_number, expiry, cvv, zip_code="1000001", country_code=None,
-             amount=None, currency=None, log=None):
+             amount=None, currency=None, log=None, finalize=True):
     """カード 1 枚で年齢確認を通す。戻り値は結果をまとめた dict。
 
     `client` は muse.ai にログイン済み（`hatch_sess` Cookie 保持）の MuseClient。
+
+    `finalize=False` は「カードは登録するが /api/checkout/finalize を撃たない」パス。
+    ccv_status は credential（カード登録）の時点で `not_required` に変わるため、
+    年齢確認だけ通したいときはこちらで足りる。finalize は 1.00 USD の LIVE 与信
+    （オーソリ）を作るので、与信を残したくない/カード消費を抑えたい場合は False。
     """
     say = log if log else (lambda msg, *args: logger.info(msg, *args))
 
@@ -427,7 +435,13 @@ def activate(client, card_number, expiry, cvv, zip_code="1000001", country_code=
         if state == "FAILURE":
             raise CcvError("カード登録後の処理に失敗しました (cardActionState=FAILURE)")
 
-    # --- 5. 確定 ---------------------------------------------------------
+    # --- 5. 確定（finalize=False なら省略） -------------------------------
+    if not finalize:
+        result["finalized"] = False
+        result["ccv_status"] = client.ccv_status()
+        say("ccv: finalize 省略 → ccv-status → %s", result["ccv_status"])
+        return result
+
     container_ptt = build_ptt({
         "receiver_id": RECEIVER_ID,
         "context_id": order_id,
@@ -451,6 +465,7 @@ def activate(client, card_number, expiry, cvv, zip_code="1000001", country_code=
     })
     checkout_status = final.get("checkoutStatus")
     result["checkout_status"] = checkout_status
+    result["finalized"] = True
     result["steps"].append(f"finalize:{checkout_status}")
     say("ccv: finalize → %s", checkout_status)
     if status != 200 or checkout_status not in ("SUCCESS", "PENDING"):
