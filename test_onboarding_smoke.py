@@ -158,12 +158,59 @@ def case_ccv_no_finalize():
         ccv.start_checkout, ccv._post_json = orig_start, orig_post
 
 
+def case_linking_403_means_done():
+    """解除済みアカウントは linking-options/web-auth が 403 → 失敗ではなく完了扱い。"""
+    from musepy import linking
+
+    class _Resp:
+        def __init__(self, status, payload):
+            self.status_code = status
+            self._payload = payload
+            self.text = json.dumps(payload)
+
+        def json(self):
+            return self._payload
+
+    class _Sess:
+        def __init__(self, resp):
+            self._resp = resp
+
+        def get(self, *a, **k):
+            return self._resp
+
+    class _Client:
+        fp = None
+
+        def __init__(self, status):
+            self.s = _Sess(_Resp(status, {"error": "Forbidden"}))
+            self._h = lambda h: {}
+
+    cl = _Client(403)
+    assert linking.linking_options(cl) == []
+    try:
+        linking.linking_options(cl, on_forbidden="raise")
+        raise AssertionError("on_forbidden=raise のはずが例外が出ない")
+    except linking.LinkingForbidden:
+        pass
+    out = linking.activate(cl, "facebook", timeout=1)
+    assert out["ok"] is True and out["next_action"] == "continue", out
+    assert out["attempt_id"] is None, out
+
+    cl = _Client(500)
+    try:
+        linking.linking_options(cl)
+        raise AssertionError("500 のはずが例外が出ない")
+    except linking.LinkingError as exc:
+        assert "500" in str(exc), exc
+
+
 def main():
     tests = [("normal_disclosure", case_normal), ("waitlist", case_waitlist),
              ("geo_gated", case_geo_gated), ("disclosure_conflict", case_conflict),
              ("disclosure_missing", case_missing), ("unknown_version", case_unknown_version),
              ("tolerant_activate_session", case_tolerant_activate_session),
-             ("ccv_no_finalize", case_ccv_no_finalize)]
+             ("ccv_no_finalize", case_ccv_no_finalize),
+             ("linking_403_means_done", case_linking_403_means_done)]
     for name, fn in tests:
         fn()
         print(f"[PASS] {name}")

@@ -254,12 +254,83 @@ def test_ccv_link_auto_rearm_margin():
     print("[PASS] ccv_link_auto_rearm_margin")
 
 
+def test_ccv_link_targets_skip_redeemed():
+    """pending_accounts は交換済み(redeemed)と解除済み(not_required)を対象から外す。"""
+    from webui import ccv_link as cl
+
+    rows = [
+        {"email": "a@x", "status": "registered_unactivated", "extra": {"ccv_status": "pending"}},
+        {"email": "b@x", "status": "redeemed", "extra": {"ccv_status": "pending"}},   # 交換＝解除済み
+        {"email": "c@x", "status": "registered_unactivated", "extra": {"ccv_status": "not_required"}},
+        {"email": "d@x", "status": "registered_unactivated", "extra": {}},
+    ]
+    orig = cl.db.list_registered_full
+    cl.db.list_registered_full = lambda limit=5000: rows
+    try:
+        got = [r["email"] for r in cl.pending_accounts()]
+        assert got == ["a@x", "d@x"], got
+    finally:
+        cl.db.list_registered_full = orig
+    print("[PASS] ccv_link_targets_skip_redeemed")
+
+
+def test_ccv_link_pick_client_403_fallback():
+    """proxy が 403 でも direct 成功ならそちら、全滅なら最後の 1 件を返す。"""
+    from webui import ccv_link as cl
+
+    class _Cli:
+        def __init__(self, tag, forbidden):
+            self.tag = tag
+            self.forbidden = forbidden
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    tags_forbidden = {"p1"}
+    made = []
+    orig = (cl._default_proxies, cl._build_client, cl.linking.linking_options)
+
+    def build(email, proxy):
+        tag = proxy or "direct"
+        cli = _Cli(tag, tag in tags_forbidden)
+        made.append(cli)
+        return cli
+
+    def opts(client, on_forbidden="empty"):
+        if client.forbidden and on_forbidden == "raise":
+            raise cl.linking.LinkingForbidden("403")
+        return [] if client.forbidden else ["facebook"]
+
+    cl._default_proxies = lambda: ["p1", None]
+    cl._build_client = build
+    cl.linking.linking_options = opts
+    try:
+        chosen = cl._pick_client("a@x")
+        assert chosen.tag == "direct", chosen.tag
+        assert made[0].closed, "403 だった proxy のクライアントは閉じる"
+
+        # proxy も direct も 403 → 例外にせず最後のクライアントを返す（error にしない）
+        tags_forbidden.add("direct")
+        made.clear()
+        cl._build_client = build
+        chosen = cl._pick_client("a@x")
+        assert chosen.tag == "direct", chosen.tag
+        assert not chosen.closed, "返したクライアントは閉じない"
+    finally:
+        (cl._default_proxies, cl._build_client,
+         cl.linking.linking_options) = orig
+    print("[PASS] ccv_link_pick_client_403_fallback")
+
+
 def main():
     test_mail_provider_otp_formats()
     test_db_and_fastapi_routes()
     test_muse_flow_end_to_end_mock()
     test_ccv_link_auto_rearm_margin()
-    print("WebUI 全链路冒烟通过 4/4")
+    test_ccv_link_targets_skip_redeemed()
+    test_ccv_link_pick_client_403_fallback()
+    print("WebUI 全链路冒烟通过 6/6")
 
 
 if __name__ == "__main__":

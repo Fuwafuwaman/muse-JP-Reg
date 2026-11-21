@@ -66,18 +66,32 @@ def _default_proxies() -> list[Optional[str]]:
 
 
 def _pick_client(email: str) -> MuseClient:
-    """連携 API が通るクライアントが取れるまで proxy を落としながら試す。"""
-    last = None
+    """連携 API が通るクライアントが取れるまで proxy を落としながら試す。
+
+    linking-options の 403 は「年齢確認が不要／解除済み」のこともあるので最後の
+    1 件は捨てずに返す（捨てると error になって無駄に再試行を繰り返す）。
+    """
+    last: Optional[Exception] = None
+    fallback: Optional[MuseClient] = None
     for proxy in _default_proxies():
         client = None
         try:
             client = _build_client(email, proxy or "")
-            linking.linking_options(client)
+            linking.linking_options(client, on_forbidden="raise")
+            if fallback is not None:
+                fallback.close()
             return client
+        except linking.LinkingForbidden as exc:
+            last = exc
+            if fallback is not None:
+                fallback.close()
+            fallback = client
         except Exception as exc:  # noqa: BLE001
             last = exc
             if client is not None:
                 client.close()
+    if fallback is not None:
+        return fallback
     raise linking.LinkingError(f"接続先を確保できない: {last}")
 
 
@@ -199,7 +213,17 @@ class LinkSession:
             action = res.get("next_action") or "pending"
             self.state = action
             if res.get("ok"):
-                self._mark_cleared()
+                # 403 / url=null は「連携済み」の意味だが、proxy の一時拒否でも返る。
+                # ccv_status が読めて未解除なら再試行に回す（読めなければ完了扱い）。
+                unsettled = (res.get("attempt_id") is None
+                             and self._ccv_status_or_none(client)
+                             not in (None, "not_required"))
+                if unsettled:
+                    action = "pending"
+                    self.state = action
+                    logger.info(f"[ccv_link] {self.email} 連携 API は完了応答だが未解除 → 待機")
+                else:
+                    self._mark_cleared()
             elif self._ccv_cleared(client):
                 # pending/stopped/error でも実際は解除済みのことがある
                 # （フロー側や別の試行で承認された場合）
@@ -229,6 +253,12 @@ class LinkSession:
             return client.ccv_status() == "not_required"
         except Exception:
             return False
+
+    def _ccv_status_or_none(self, client) -> Optional[str]:
+        try:
+            return client.ccv_status() or None
+        except Exception:
+            return None
 
     def _mark_cleared(self) -> None:
         db.save_registered({"email": self.email, "ccv_status": "not_required"})
@@ -445,9 +475,15 @@ MANAGER = LinkManager()
 
 
 def pending_accounts() -> list[dict]:
-    """年齢確認が未解除（または不明）の registered を返す（画面の「対象一覧」用）。"""
+    """年齢確認が未解除（または不明）の registered を返す（画面の「対象一覧」用）。
+
+    ``status == "redeemed"`` は交換まで通った＝年齢確認は解除済みなので除く
+    （``extra`` の ccv_status は登録時のままで古いことがある）。
+    """
     out = []
     for row in db.list_registered_full(limit=5000):
+        if str(row.get("status") or "").strip() == "redeemed":
+            continue
         ccv = str((row.get("extra") or {}).get("ccv_status") or "").strip()
         if ccv == "not_required":
             continue

@@ -924,6 +924,7 @@ def redeem_registered_account(
     ccv_mode: str = CCV_MODE_CARD,
     ccv_link_account_type: str = "facebook",
     ccv_link_timeout: float = 600.0,
+    no_charge: bool = True,
     on_link_url: Optional[Callable[[str, dict], None]] = None,
 ) -> dict:
     """对已注册（含未激活或已激活）的账号补跑会话引导 + accept_tos + wake_vm + redeem + scratch_code。"""
@@ -946,7 +947,7 @@ def redeem_registered_account(
             if onboarding.get("verification_required") or str(onboarding.get("ccv_status") or "") not in ("", "not_required"):
                 _ensure_ccv(client, ccv_card, ccv_mode, ccv_link_account_type,
                             ccv_link_timeout, on_link_url,
-                            email=(cred.get("email") or ""))
+                            email=(cred.get("email") or ""), no_charge=no_charge)
                 try:
                     onboarding = client.refresh_onboarding()
                 except Exception:
@@ -958,7 +959,7 @@ def redeem_registered_account(
             # アクティベーション済みでも CCV が未解除なら 403 のままなので解除しておく
             _ensure_ccv(client, ccv_card, ccv_mode, ccv_link_account_type,
                         ccv_link_timeout, on_link_url,
-                        email=(cred.get("email") or ""))
+                        email=(cred.get("email") or ""), no_charge=no_charge)
         # 协议要求：兑换前必须调 wake_vm，否则有效码也会误报 invalid
         vm_id = client.wake_vm()
         client.stateful_sharing()

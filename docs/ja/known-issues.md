@@ -41,6 +41,8 @@
 - **完了チェック `linking-web-auth-completion` は「Meta 側がまだ解決していない」間 HTTP 429 `{"error":"Failed to resolve account linking"}` を返します（これが実質の `pending`。1 本だけを 0.3 req/s で叩いても 429 なので、レート制限ではありません）**: 20 件を並列で待つと開始直後から常時 429 になります。そこで **429 は失敗と数えず、ポーリング間隔どおり淡々と待ち続けます**（ログには `link: まだ未解決（429）、待機中` と出続けます＝正常）。429 以外の失敗だけを粘り、`hard`（429 以外の 4xx＝403 など）は即送出、5xx などは 10 回かつ連続 60 秒で諦めます。バックオフ中に寿命が来た場合は例外ではなく `pending` を返すため、試行が `error` に落ちず承認 URL は寿命（約 17 分）まで生き残ります。`LinkSession.run` は activate を最大 4 回試行し直し、URL が生きているうちは同じ `attempt_id` を使い回すので、人間が既に開いたタブを無効化しません。送信は `linking._slot()` がプロセス全体で「間隔 0.3 秒以上・同時 6 件以下」に抑えます。
   - したがって `/link` の行が何分も `pending` のままなのは**正常**です（429 は解決待ちの合図）。`state=error` になるのは 403 など回復しない応答を受けたときだけです。
   - それでも `state=error` になった行は、その行の「URL 出し直す」を押して開き直してください（URL 自体はまだ生きていても、追跡が切れている可能性があるためです）。
+- **`linking-options` の 403 は「失敗」ではなく「もう連携先が無い」か「接続先の一時拒否」です（コード側で吸収済み）**: 解除済みのアカウントに `GET .../linking-options` / `GET .../linking-web-auth` を撃つと 403 `{"error":"Forbidden"}` が返ります。proxy の出口 IP と Cookie がずれたときにも同じ 403 が返ります。そこで `musepy/linking.py` は 403 を「連携対象なし」に畳み（`linking_options()` は空配列、`start()` は `url:null` ＝完了扱い）、`webui/ccv_link.py::_pick_client` は 403 のときだけ次の接続先（代理池 → 直結）に落とし、**全滅したら最後のクライアントを捨てずに返します**（捨てると `state=error` になり、無駄な出し直しを繰り返すだけになります）。加えて `LinkSession.run` は `url:null` / 403 で完了扱いになったとき、`ccv_status` が読めて未解除なら `pending` に戻します（誤って「解除済み」と記録しないため）。
+- **`/link` の対象一覧は「未解除のものだけ」です**: 交換（redeem）まで通った `status=redeemed` のアカウントは CCV が既に解除済みなので、`ccv_status` が古い `pending` のまま残っていても一覧から外れます（`webui/ccv_link.py::pending_accounts`）。
 - **席を外しても承認 URL が切れないよう、自動で出し直します（既定オン）**: 承認 URL の寿命は約 17 分しかないため、`LinkManager` の監視スレッド（90 秒周期）が「残り寿命 150 秒未満」または `state=error` の試行に新しい URL を出し直します（同一メールは最短 45 秒間隔・1 件ずつ実行して `start` の 429 を避けます）。`/link` の「切れた URL を自動で出し直す」チェックボックスで切り替えでき、`GET/POST /api/ccv/link/auto`（手動実行は `POST /api/ccv/link/auto/tick`）でも操作できます。
   - 承認は常に最新のタブで行う必要はありません。古いタブで承認しても、その試行の裏スレッドが `ccv_status` を再確認して `continue` に落とし、次の出し直しの `start` は `url:null` を返して自然に止まります。
   - 登録フロー側が自分でポーリングしている枠（`external=True`）は、二重に叩かないよう自動出し直しの対象外です。
@@ -105,6 +107,7 @@
 - 対応: WebUI の「設定」→ メール設定 → `CCV: カード番号` / `有効期限 (MM/YY)` / `セキュリティコード` / `郵便番号` / `国コード` に入力します（`GET/POST /api/settings/ccv`、`db.CCV_FIELDS`）。解除処理は `auth_flow.py` が `accept-tos` の直前に `ensure_ccv` を自動実行します。
 - 検証状態: `musepy/ccv.py`（checkout init → credential → finalize、`$e2ee` PTT 暗号化）は **BIN `454924` の実クレジットカードで 10 アカウントを `not_required` まで通し済み**（11 件目は `2078073` の上限）。`musepy/linking.py` は開始〜URL 取得〜ポーリングまで実機で疎通確認済み（`continue` 到達はブラウザ承認待ち）。
 - 注意: 既定（`finalize=False`）では**与信は走らず、カード会社の明細に 1.00 USD は出ません**。`finalize=True` を選んだときだけ 1.00 USD の LIVE 与信が作られ、明細に仮計上されます（いずれも実課金ではありません）。
+- 既に登録だけ済んでいるアカウントを掘り起こす `auth_flow.redeem_registered_account` も `no_charge=True`（既定）を `_ensure_ccv` に通すので、この経路でカードが使われても与信は走りません（`no_charge=False` で 1.00 USD 与信になります）。
 
 ### 実測サマリ（20 件運用の現在地）
 

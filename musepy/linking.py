@@ -136,9 +136,21 @@ def _post_json(client, path, body):
         return r.status_code, {"_raw": r.text[:200]}
 
 
-def linking_options(client):
-    """連携できるアカウント種別の一覧を返す。"""
+class LinkingForbidden(LinkingError):
+    """403 応答。年齢確認が不要／解除済みか、接続先（proxy/IP）の一時的な拒否。"""
+
+
+def linking_options(client, on_forbidden: str = "empty"):
+    """連携できるアカウント種別の一覧を返す。
+
+    403 は「年齢確認が不要／解除済み」＝連携相手が無い、と接続先の一時拒否の
+    両方で返る。``on_forbidden="raise"`` なら ``LinkingForbidden`` で送出する。
+    """
     status, data = _get_json(client, OPTIONS_PATH)
+    if status == 403:
+        if on_forbidden == "raise":
+            raise LinkingForbidden(f"linking-options 403: {str(data)[:200]}")
+        return []
     if status != 200:
         raise LinkingError(f"linking-options {status}: {str(data)[:200]}")
     types = [t for t in (data.get("linkable_account_types") or [])
@@ -164,6 +176,10 @@ def start(client, account_type=DEFAULT_ACCOUNT_TYPE, retry_attempt_id=None):
     if retry_attempt_id:
         path += "&retry_attempt_id=" + retry_attempt_id
     status, data = _get_json(client, path)
+    if status == 403:
+        # 年齢確認が不要／解除済みのアカウントは開始 API も 403 を返す
+        return {"url": None, "attempt_id": None, "expires_at": None,
+                "account_type": account_type}
     if status != 200:
         raise LinkingError(f"linking-web-auth {status}: {str(data)[:200]}")
     url = data.get("url")
