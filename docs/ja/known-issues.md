@@ -92,6 +92,7 @@
 逆に `4549240653688285`（Visa **クレジット**）は **20 件のうち 10 件まで通し、11 件目から上限で止まりました**。
 
 - 症状: `GET /api/hatch/ccv-status` が `{"ccv_status":"ccv_required"}` を返すアカウントは、`hasCompletedActivation` になる前に `/api/hatch/accept-tos` / `/api/hatch/stateful-sharing` / `/api/hatch/invite` / `/api/hatch/invite-code/redeem` が**すべて 403**（`POST /api/auth/check` は `hatchAdmissionInvalidated`）。→ 自分の招待コードが 1 つも出ない＝**裂変（増殖）が止まります**。
+- **上限は「そのカード」の話で、未解除の全件で一貫して再現（実測・再確認済み）**: 11 件目以降の未解除アカウントに同じクレジットカードを撃ち直すと、必ず `code=2078073 step=write` で止まります（例外なし＝BIN 一時停止ではありません）。逆にデビットは 1 件目から `1383254` なので、**残りの解除は `ccv_mode=link`（カード不要・Meta 連携）か 2 枚目のクレジットカードが必須**です。ここで上限に当たっても `ccv-status` は `ccv_required` のまま変わらないため、失敗は繰り返し再現します。
 - **デビット不可（実測）**: 実カードを入れても `POST /api/checkout/credential` が `code=1383254`「年齢確認のため、VisaまたはMastercardの**クレジットカード**を使用してください。**デビットカードは利用できません**。」を返します。BIN `461935` は PayPay 銀行発行の Visa CLASSIC **DEBIT** なので、この時点で通れません。→ クレジットカードを用意するか、`ccv_mode=link`（上記）に切り替えます。
 - **1 枚あたりの上限は 10 アカウント（実測・重要）**: BIN `454924` のクレジットカードで 10 件目までは `success:true`、**11 件目から `code=2078073 step=write`「このカードが関連付けられている広告アカウントが多すぎます。別の支払い方法を選択して、もう一度実行してください。」**。20 件流すなら **2 枚目**（クレジット）が必要です。BIN や期限を変えても同じカードなら上限は共通で、時間を置いての回復も確認できていません。
 - **与信（オーソリ）は撃たなくても解除できます（実測）**: 解除に必要なのは `POST /api/checkout/credential`（カード登録）までで、この時点で `ccv-status` は `not_required` に変わります。`POST /api/checkout/finalize` は 1.00 USD の LIVE 与信を作るだけなので、**`musepy/ccv.py` の `activate(..., finalize=False)` を使えばカード明細に載りません**（`auth_flow.ensure_ccv` は既定でこの与信なしパスを通り、それでも解除されないカードだけ finalize 付きで撃ち直します）。課金（実売上）はどのみち発生しません。
